@@ -159,7 +159,9 @@ Web 用户名默认为 `admin`，密码由 `scripts/init-nas.sh` 随机生成。
 sudo sed -n 's/^WEB_UI_USERNAME=//p; s/^WEB_UI_PASSWORD=//p' /volume2/docker/autoStuKnow/.env
 ```
 
-登录状态使用 HttpOnly、SameSite=Strict 的签名 Cookie；密码不会写入网页或浏览器存储。直接使用局域网 HTTP 时 `WEB_UI_SECURE_COOKIE=false`；配置 HTTPS 反向代理后改为 `true` 并重建 Ingestor。
+初始化密码只用于首次登录。第一次登录后必须在页面设置至少 8 位的新密码，完成后才能提交和查看任务；以后也可以通过右上角的“修改密码”入口更换。新密码只以 PBKDF2 哈希保存在 `${DATA_ROOT}/ingestor/auth/web-credentials.json`，不会回写 `.env`，也不会以明文保存。
+
+登录状态使用 HttpOnly、SameSite=Strict 的签名 Cookie；修改密码后旧会话会自动失效。直接使用局域网 HTTP 时 `WEB_UI_SECURE_COOKIE=false`；配置 HTTPS 反向代理后改为 `true` 并重建 Ingestor。
 
 ### 通过 n8n 自动化接口
 

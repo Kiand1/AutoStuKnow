@@ -8,15 +8,32 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, sta
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 
 from .config import Settings
-from .models import BatchJobRequest, JobRecord, JobRequest, JobSubmission, WebLoginRequest
+from .models import (
+    BatchJobRequest,
+    JobRecord,
+    JobRequest,
+    JobSubmission,
+    WebLoginRequest,
+    WebPasswordChangeRequest,
+)
 from .pipeline import JobManager, PipelineError
 from .urls import canonicalize_youtube_url
-from .web_auth import SESSION_COOKIE, LoginThrottle, WebSessionSigner
+from .web_auth import (
+    SESSION_COOKIE,
+    LoginThrottle,
+    WebCredentialStore,
+    WebSession,
+    WebSessionSigner,
+)
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings or Settings()
     manager = JobManager(resolved_settings)
+    credential_store = WebCredentialStore(
+        resolved_settings.data_dir,
+        resolved_settings.web_ui_password,
+    )
     session_signer = WebSessionSigner(
         resolved_settings.web_ui_session_secret,
         resolved_settings.web_ui_session_ttl_hours * 3600,
@@ -36,6 +53,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     application.state.settings = resolved_settings
     application.state.manager = manager
+    application.state.credential_store = credential_store
     application.state.session_signer = session_signer
 
     async def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
@@ -46,11 +64,53 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 detail="无效的 X-API-Key",
             )
 
-    async def require_web_session(request: Request) -> str:
-        username = session_signer.verify(request.cookies.get(SESSION_COOKIE))
-        if username != resolved_settings.web_ui_username:
+    def active_web_session(request: Request) -> WebSession | None:
+        web_session = session_signer.verify(request.cookies.get(SESSION_COOKIE))
+        if (
+            web_session is None
+            or web_session.username != resolved_settings.web_ui_username
+            or web_session.credential_revision != credential_store.revision
+        ):
+            return None
+        return web_session
+
+    async def require_authenticated_web_session(request: Request) -> WebSession:
+        web_session = active_web_session(request)
+        if web_session is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="请先登录")
-        return username
+        return web_session
+
+    async def require_web_session(request: Request) -> str:
+        web_session = await require_authenticated_web_session(request)
+        if credential_store.must_change_password:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="首次登录必须先修改初始密码",
+            )
+        return web_session.username
+
+    def authenticated_response(credential_revision: int) -> JSONResponse:
+        response = JSONResponse(
+            {
+                "authenticated": True,
+                "must_change_password": credential_store.must_change_password,
+                "username": resolved_settings.web_ui_username,
+            }
+        )
+        response.set_cookie(
+            key=SESSION_COOKIE,
+            value=session_signer.create(
+                resolved_settings.web_ui_username,
+                credential_revision=credential_revision,
+            ),
+            max_age=resolved_settings.web_ui_session_ttl_hours * 3600,
+            httponly=True,
+            secure=resolved_settings.web_ui_secure_cookie,
+            samesite="strict",
+            path="/",
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @application.get("/", include_in_schema=False)
     async def root() -> RedirectResponse:
@@ -66,11 +126,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @application.get("/ui/api/session", include_in_schema=False)
     async def web_session(request: Request) -> dict[str, str | bool]:
-        username = session_signer.verify(request.cookies.get(SESSION_COOKIE))
-        authenticated = username == resolved_settings.web_ui_username
+        current_session = active_web_session(request)
+        authenticated = current_session is not None
         return {
             "authenticated": authenticated,
-            "username": username if authenticated else "",
+            "must_change_password": (
+                credential_store.must_change_password if authenticated else False
+            ),
+            "username": current_session.username if current_session else "",
         }
 
     @application.post("/ui/api/login", include_in_schema=False)
@@ -82,30 +145,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 detail="登录尝试过多，请十分钟后再试",
             )
         username_matches = hmac.compare_digest(
-            credentials.username,
-            resolved_settings.web_ui_username,
+            credentials.username.encode("utf-8"),
+            resolved_settings.web_ui_username.encode("utf-8"),
         )
-        password_matches = hmac.compare_digest(
-            credentials.password,
-            resolved_settings.web_ui_password,
-        )
+        password_matches = credential_store.verify(credentials.password)
         if not (username_matches and password_matches):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="用户名或密码错误")
         login_throttle.clear(client_id)
-        response = JSONResponse(
-            {"authenticated": True, "username": resolved_settings.web_ui_username}
-        )
-        response.set_cookie(
-            key=SESSION_COOKIE,
-            value=session_signer.create(resolved_settings.web_ui_username),
-            max_age=resolved_settings.web_ui_session_ttl_hours * 3600,
-            httponly=True,
-            secure=resolved_settings.web_ui_secure_cookie,
-            samesite="strict",
-            path="/",
-        )
-        response.headers["Cache-Control"] = "no-store"
-        return response
+        return authenticated_response(credential_store.revision)
+
+    @application.post("/ui/api/password", include_in_schema=False)
+    async def web_change_password(
+        request: Request,
+        password_change: WebPasswordChangeRequest,
+    ) -> JSONResponse:
+        await require_authenticated_web_session(request)
+        changing_initial_password = credential_store.must_change_password
+        if not changing_initial_password:
+            current_password = password_change.current_password or ""
+            if not credential_store.verify(current_password):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="当前密码错误",
+                )
+        if credential_store.verify(password_change.new_password):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="新密码不能与当前密码相同",
+            )
+        revision = credential_store.set_password(password_change.new_password)
+        return authenticated_response(revision)
 
     @application.post("/ui/api/logout", include_in_schema=False)
     async def web_logout() -> Response:

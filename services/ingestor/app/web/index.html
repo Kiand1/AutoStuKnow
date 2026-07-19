@@ -92,6 +92,8 @@
     .secondary { color: var(--brand); background: var(--brand-soft); }
     .ghost { color: var(--muted); background: transparent; border: 1px solid var(--line); }
     .wide { width: 100%; margin-top: 22px; }
+    .form-actions { display: flex; gap: 10px; margin-top: 22px; }
+    .form-actions .primary { flex: 1; }
     .message { min-height: 22px; margin: 14px 0 0; color: var(--danger); font-size: 14px; }
     header {
       height: 72px;
@@ -174,11 +176,41 @@
     </form>
   </section>
 
+  <section id="passwordView" class="login-wrap hidden">
+    <form id="passwordForm" class="login-card" autocomplete="off">
+      <div class="mark" aria-hidden="true">AS</div>
+      <h1 id="passwordTitle">修改登录密码</h1>
+      <p id="passwordDescription" class="subtle">修改成功后，其他已登录会话会自动失效。</p>
+      <div id="currentPasswordField" class="field">
+        <label for="currentPassword">当前密码</label>
+        <input id="currentPassword" name="currentPassword" type="password" maxlength="256" autocomplete="current-password">
+      </div>
+      <div class="field">
+        <label for="newPassword">新密码</label>
+        <input id="newPassword" name="newPassword" type="password" minlength="8" maxlength="256" autocomplete="new-password" required>
+      </div>
+      <div class="field">
+        <label for="confirmPassword">确认新密码</label>
+        <input id="confirmPassword" name="confirmPassword" type="password" minlength="8" maxlength="256" autocomplete="new-password" required>
+      </div>
+      <p class="subtle">至少 8 位，建议使用容易记住但别人猜不到的短语。</p>
+      <div class="form-actions">
+        <button id="passwordButton" class="primary" type="submit">保存新密码</button>
+        <button id="passwordLogoutButton" class="ghost" type="button">退出</button>
+      </div>
+      <p id="passwordMessage" class="message" role="alert"></p>
+    </form>
+  </section>
+
   <section id="appView" class="hidden">
     <header>
       <div class="shell nav">
         <div class="brand"><div class="mark" aria-hidden="true">AS</div><span>AutoStuKnow</span></div>
-        <div class="account"><span id="accountName"></span><button id="logoutButton" class="ghost" type="button">退出</button></div>
+        <div class="account">
+          <span id="accountName"></span>
+          <button id="changePasswordButton" class="ghost" type="button">修改密码</button>
+          <button id="logoutButton" class="ghost" type="button">退出</button>
+        </div>
       </div>
     </header>
     <main class="shell">
@@ -230,10 +262,12 @@
 
   <script>
     const loginView = document.querySelector('#loginView');
+    const passwordView = document.querySelector('#passwordView');
     const appView = document.querySelector('#appView');
     const jobsElement = document.querySelector('#jobs');
     const jobs = new Map();
     let pollTimer = null;
+    let passwordChangeRequired = false;
 
     const stageNames = {
       queued: '等待中', fetching_metadata: '读取视频信息', fetching_subtitles: '读取字幕',
@@ -276,13 +310,39 @@
 
     function showLogin() {
       appView.classList.add('hidden');
+      passwordView.classList.add('hidden');
       loginView.classList.remove('hidden');
+      document.querySelector('#password').value = '';
       clearInterval(pollTimer);
       pollTimer = null;
     }
 
+    function showPasswordChange(username, required) {
+      passwordChangeRequired = required;
+      loginView.classList.add('hidden');
+      appView.classList.add('hidden');
+      passwordView.classList.remove('hidden');
+      document.querySelector('#accountName').textContent = username;
+      document.querySelector('#passwordTitle').textContent = required ? '请先设置新密码' : '修改登录密码';
+      document.querySelector('#passwordDescription').textContent = required
+        ? '这是首次登录。设置自己的密码后才能进入知识采集页面。'
+        : '修改成功后，其他已登录会话会自动失效。';
+      const currentField = document.querySelector('#currentPasswordField');
+      const currentInput = document.querySelector('#currentPassword');
+      currentField.classList.toggle('hidden', required);
+      currentInput.required = !required;
+      currentInput.value = '';
+      document.querySelector('#newPassword').value = '';
+      document.querySelector('#confirmPassword').value = '';
+      document.querySelector('#passwordMessage').textContent = '';
+      clearInterval(pollTimer);
+      pollTimer = null;
+      document.querySelector('#newPassword').focus();
+    }
+
     async function showApp(username) {
       loginView.classList.add('hidden');
+      passwordView.classList.add('hidden');
       appView.classList.remove('hidden');
       document.querySelector('#accountName').textContent = username;
       document.querySelector('#password').value = '';
@@ -366,6 +426,35 @@
             password: document.querySelector('#password').value
           })
         });
+        if (result.must_change_password) showPasswordChange(result.username, true);
+        else await showApp(result.username);
+      } catch (error) {
+        message.textContent = error.message;
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    document.querySelector('#passwordForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const button = document.querySelector('#passwordButton');
+      const message = document.querySelector('#passwordMessage');
+      const newPassword = document.querySelector('#newPassword').value;
+      const confirmPassword = document.querySelector('#confirmPassword').value;
+      message.textContent = '';
+      if (newPassword.length < 8) { message.textContent = '新密码至少需要 8 位'; return; }
+      if (newPassword !== confirmPassword) { message.textContent = '两次输入的新密码不一致'; return; }
+      button.disabled = true;
+      try {
+        const result = await api('/ui/api/password', {
+          method: 'POST',
+          body: JSON.stringify({
+            current_password: passwordChangeRequired ? null : document.querySelector('#currentPassword').value,
+            new_password: newPassword
+          })
+        });
+        passwordChangeRequired = false;
+        showToast('密码修改成功');
         await showApp(result.username);
       } catch (error) {
         message.textContent = error.message;
@@ -412,6 +501,12 @@
 
     document.querySelector('#urls').addEventListener('input', updateCounter);
     document.querySelector('#refreshButton').addEventListener('click', refreshJobs);
+    document.querySelector('#changePasswordButton').addEventListener('click', () => {
+      showPasswordChange(document.querySelector('#accountName').textContent, false);
+    });
+    document.querySelector('#passwordLogoutButton').addEventListener('click', async () => {
+      try { await api('/ui/api/logout', { method: 'POST' }); } finally { showLogin(); }
+    });
     document.querySelector('#logoutButton').addEventListener('click', async () => {
       try { await api('/ui/api/logout', { method: 'POST' }); } finally { showLogin(); }
     });
@@ -419,7 +514,9 @@
     (async () => {
       try {
         const session = await api('/ui/api/session');
-        if (session.authenticated) await showApp(session.username); else showLogin();
+        if (!session.authenticated) showLogin();
+        else if (session.must_change_password) showPasswordChange(session.username, true);
+        else await showApp(session.username);
       } catch { showLogin(); }
     })();
   </script>

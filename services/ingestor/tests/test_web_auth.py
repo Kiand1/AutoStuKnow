@@ -1,11 +1,14 @@
-from app.web_auth import LoginThrottle, WebSessionSigner
+from app.web_auth import LoginThrottle, WebSession, WebSessionSigner
 
 
 def test_signed_web_session_accepts_valid_and_rejects_tampered_or_expired() -> None:
     signer = WebSessionSigner("s" * 48, ttl_seconds=60)
-    token = signer.create("admin", now=1_000)
+    token = signer.create("admin", credential_revision=3, now=1_000)
 
-    assert signer.verify(token, now=1_059) == "admin"
+    assert signer.verify(token, now=1_059) == WebSession(
+        username="admin",
+        credential_revision=3,
+    )
     assert signer.verify(token, now=1_060) is None
     assert signer.verify(token + "tampered", now=1_001) is None
 

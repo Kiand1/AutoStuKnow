@@ -42,6 +42,11 @@ class WebLoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=256)
 
 
+class WebPasswordChangeRequest(BaseModel):
+    current_password: str | None = Field(default=None, max_length=256)
+    new_password: str = Field(min_length=8, max_length=256)
+
+
 class JobRecord(BaseModel):
     id: str
     url: str

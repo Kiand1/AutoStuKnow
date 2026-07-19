@@ -8,6 +8,8 @@ from app.main import create_app
 from app.models import JobRecord
 
 API_KEY = "test-key-that-is-at-least-24-characters"
+INITIAL_WEB_PASSWORD = "test-web-password-123456789"
+USER_WEB_PASSWORD = "memorable-password-123"
 
 
 def build_client(tmp_path: Path) -> TestClient:
@@ -15,7 +17,7 @@ def build_client(tmp_path: Path) -> TestClient:
         data_dir=tmp_path,
         ingestor_api_key=API_KEY,
         web_ui_username="admin",
-        web_ui_password="test-web-password-123456789",
+        web_ui_password=INITIAL_WEB_PASSWORD,
         web_ui_session_secret="test-web-session-secret-that-is-at-least-32-characters",
         anythingllm_auto_sync=False,
     )
@@ -60,19 +62,107 @@ def test_web_ui_requires_login_and_uses_secure_session_cookie(tmp_path: Path) ->
         )
         login = client.post(
             "/ui/api/login",
-            json={"username": "admin", "password": "test-web-password-123456789"},
+            json={"username": "admin", "password": INITIAL_WEB_PASSWORD},
         )
         session = client.get("/ui/api/session")
+        blocked_until_changed = client.get("/ui/api/jobs")
+        password_change = client.post(
+            "/ui/api/password",
+            json={"new_password": USER_WEB_PASSWORD},
+        )
+        ready_session = client.get("/ui/api/session")
+        client.post("/ui/api/logout")
+        old_password = client.post(
+            "/ui/api/login",
+            json={"username": "admin", "password": INITIAL_WEB_PASSWORD},
+        )
+        new_password = client.post(
+            "/ui/api/login",
+            json={"username": "admin", "password": USER_WEB_PASSWORD},
+        )
 
     assert page.status_code == 200
     assert "批量添加视频知识" in page.text
+    assert "请先设置新密码" in page.text
     assert denied.status_code == 401
     assert wrong.status_code == 401
     assert login.status_code == 200
+    assert login.json()["must_change_password"] is True
     cookie = login.headers["set-cookie"].lower()
     assert "httponly" in cookie
     assert "samesite=strict" in cookie
-    assert session.json() == {"authenticated": True, "username": "admin"}
+    assert session.json() == {
+        "authenticated": True,
+        "must_change_password": True,
+        "username": "admin",
+    }
+    assert blocked_until_changed.status_code == 403
+    assert password_change.status_code == 200
+    assert password_change.json()["must_change_password"] is False
+    assert ready_session.json() == {
+        "authenticated": True,
+        "must_change_password": False,
+        "username": "admin",
+    }
+    credential_file = tmp_path / "auth" / "web-credentials.json"
+    assert credential_file.is_file()
+    assert USER_WEB_PASSWORD not in credential_file.read_text(encoding="utf-8")
+    assert old_password.status_code == 401
+    assert new_password.status_code == 200
+    assert new_password.json()["must_change_password"] is False
+
+
+def test_web_password_can_be_changed_again_and_invalidates_other_sessions(tmp_path: Path) -> None:
+    app = create_app(
+        Settings(
+            data_dir=tmp_path,
+            ingestor_api_key=API_KEY,
+            web_ui_username="admin",
+            web_ui_password=INITIAL_WEB_PASSWORD,
+            web_ui_session_secret="test-web-session-secret-that-is-at-least-32-characters",
+            anythingllm_auto_sync=False,
+        )
+    )
+    with TestClient(app) as primary, TestClient(app) as secondary:
+        primary.post(
+            "/ui/api/login",
+            json={"username": "admin", "password": INITIAL_WEB_PASSWORD},
+        )
+        primary.post("/ui/api/password", json={"new_password": USER_WEB_PASSWORD})
+        secondary.post(
+            "/ui/api/login",
+            json={"username": "admin", "password": USER_WEB_PASSWORD},
+        )
+        wrong_current = primary.post(
+            "/ui/api/password",
+            json={"current_password": "wrong-password", "new_password": "another-password-456"},
+        )
+        changed = primary.post(
+            "/ui/api/password",
+            json={
+                "current_password": USER_WEB_PASSWORD,
+                "new_password": "another-password-456",
+            },
+        )
+        stale_session = secondary.get("/ui/api/session")
+
+    assert wrong_current.status_code == 400
+    assert changed.status_code == 200
+    assert stale_session.json()["authenticated"] is False
+
+    with build_client(tmp_path) as restarted:
+        initial_after_restart = restarted.post(
+            "/ui/api/login",
+            json={"username": "admin", "password": INITIAL_WEB_PASSWORD},
+        )
+        persisted_password = restarted.post(
+            "/ui/api/login",
+            json={"username": "admin", "password": "another-password-456"},
+        )
+
+    assert initial_after_restart.status_code == 401
+    assert persisted_password.status_code == 200
+    assert persisted_password.json()["must_change_password"] is False
 
 
 def test_web_ui_batch_deduplicates_input_urls(tmp_path: Path) -> None:
@@ -81,7 +171,7 @@ def test_web_ui_batch_deduplicates_input_urls(tmp_path: Path) -> None:
             data_dir=tmp_path,
             ingestor_api_key=API_KEY,
             web_ui_username="admin",
-            web_ui_password="test-web-password-123456789",
+            web_ui_password=INITIAL_WEB_PASSWORD,
             web_ui_session_secret="test-web-session-secret-that-is-at-least-32-characters",
             anythingllm_auto_sync=False,
         )
@@ -96,8 +186,9 @@ def test_web_ui_batch_deduplicates_input_urls(tmp_path: Path) -> None:
     with TestClient(app) as client:
         client.post(
             "/ui/api/login",
-            json={"username": "admin", "password": "test-web-password-123456789"},
+            json={"username": "admin", "password": INITIAL_WEB_PASSWORD},
         )
+        client.post("/ui/api/password", json={"new_password": USER_WEB_PASSWORD})
         response = client.post(
             "/ui/api/jobs/batch",
             json={
