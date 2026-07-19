@@ -1,0 +1,76 @@
+{
+  "id": "AutoStuKnowYoutubeV1",
+  "name": "AutoStuKnow - YouTube to RAG",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "youtube-to-rag",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "d3f4875c-12cd-4ac2-bf63-b18bd10e9b8a",
+      "name": "YouTube URL Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [260, 300],
+      "webhookId": "autostuknow-youtube-to-rag",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "AutoStuKnowWebhookHeaderAuth",
+          "name": "AutoStuKnow Webhook Header Auth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ingestor:8080/jobs",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.INGESTOR_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/json",
+        "body": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "584baf34-b4d0-49ef-93b2-8d0bfa1f62f3",
+      "name": "Create ingestion job",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [520, 300]
+    }
+  ],
+  "connections": {
+    "YouTube URL Webhook": {
+      "main": [
+        [
+          {
+            "node": "Create ingestion job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

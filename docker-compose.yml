@@ -1,0 +1,165 @@
+name: autostuknow
+
+services:
+  anythingllm:
+    image: ${ANYTHINGLLM_IMAGE:-mintplexlabs/anythingllm:latest}
+    container_name: autostuknow-anythingllm
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:${ANYTHINGLLM_PORT:-3001}:3001"
+    cap_add:
+      - SYS_ADMIN
+    user: "${PUID:-1000}:${PGID:-1000}"
+    environment:
+      STORAGE_DIR: /app/server/storage
+      JWT_SECRET: ${ANYTHINGLLM_JWT_SECRET:?请先运行 scripts/init-nas.sh}
+      DISABLE_TELEMETRY: "true"
+      LLM_PROVIDER: ${ANYTHINGLLM_LLM_PROVIDER:-}
+      DEEPSEEK_API_KEY: ${LLM_API_KEY:-}
+      DEEPSEEK_MODEL_PREF: ${LLM_MODEL:-deepseek-v4-pro}
+      EMBEDDING_ENGINE: native
+      EMBEDDING_MODEL_PREF: ${ANYTHINGLLM_EMBEDDING_MODEL:-MintplexLabs/multilingual-e5-small}
+      UID: ${PUID:-1000}
+      GID: ${PGID:-1000}
+    volumes:
+      - ${DATA_ROOT:-./data}/anythingllm:/app/server/storage
+      - ${DATA_ROOT:-./data}/anythingllm-hotdir:/app/collector/hotdir
+      - ${DATA_ROOT:-./data}/anythingllm-outputs:/app/collector/outputs
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3001/api/ping >/dev/null || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    networks:
+      - rag
+
+  whisper:
+    image: ${WHISPER_IMAGE:-hwdsl2/whisper-server:latest}
+    container_name: autostuknow-whisper
+    restart: unless-stopped
+    expose:
+      - "9000"
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-base}
+      WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-auto}
+      WHISPER_DEVICE: cpu
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+      WHISPER_THREADS: ${WHISPER_THREADS:-4}
+      WHISPER_API_KEY: ${WHISPER_API_KEY:-}
+    volumes:
+      - ${DATA_ROOT:-./data}/whisper:/var/lib/whisper
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/health >/dev/null || curl -fsS http://127.0.0.1:9000/v1/models >/dev/null"]
+      interval: 20s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    networks:
+      - rag
+
+  ingestor:
+    build:
+      context: ./services/ingestor
+    image: autostuknow/ingestor:local
+    container_name: autostuknow-ingestor
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:${INGESTOR_PORT:-8090}:8080"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      DENO_DIR: /data/cache/deno
+      DATA_DIR: /data
+      INGESTOR_API_KEY: ${INGESTOR_API_KEY:?请先运行 scripts/init-nas.sh}
+      WEB_UI_USERNAME: ${WEB_UI_USERNAME:-admin}
+      WEB_UI_PASSWORD: ${WEB_UI_PASSWORD:?请先运行 scripts/init-nas.sh}
+      WEB_UI_SESSION_SECRET: ${WEB_UI_SESSION_SECRET:?请先运行 scripts/init-nas.sh}
+      WEB_UI_SESSION_TTL_HOURS: ${WEB_UI_SESSION_TTL_HOURS:-24}
+      WEB_UI_SECURE_COOKIE: ${WEB_UI_SECURE_COOKIE:-false}
+      WHISPER_BASE_URL: http://whisper:9000
+      WHISPER_API_KEY: ${WHISPER_API_KEY:-}
+      WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-auto}
+      MAX_VIDEO_DURATION_MINUTES: ${MAX_VIDEO_DURATION_MINUTES:-180}
+      MAX_DOWNLOAD_SIZE_MB: ${MAX_DOWNLOAD_SIZE_MB:-1024}
+      MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-1}
+      KEEP_AUDIO: ${KEEP_AUDIO:-false}
+      YTDLP_COOKIES_FILE: ${YTDLP_COOKIES_FILE:-}
+      PREFER_YOUTUBE_SUBTITLES: ${PREFER_YOUTUBE_SUBTITLES:-true}
+      ALLOW_AUTOMATIC_SUBTITLES: ${ALLOW_AUTOMATIC_SUBTITLES:-true}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      LLM_THINKING_MODE: ${LLM_THINKING_MODE:-}
+      LLM_JSON_MODE: ${LLM_JSON_MODE:-false}
+      SUMMARY_LANGUAGE: ${SUMMARY_LANGUAGE:-zh-CN}
+      LLM_CHUNK_CHARS: ${LLM_CHUNK_CHARS:-12000}
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-1800}
+      ANYTHINGLLM_BASE_URL: http://anythingllm:3001/api
+      ANYTHINGLLM_API_KEY: ${ANYTHINGLLM_API_KEY:-}
+      ANYTHINGLLM_WORKSPACE_SLUG: ${ANYTHINGLLM_WORKSPACE_SLUG:-}
+      ANYTHINGLLM_AUTO_SYNC: ${ANYTHINGLLM_AUTO_SYNC:-true}
+      ANYTHINGLLM_SYNC_TIMEOUT_SECONDS: ${ANYTHINGLLM_SYNC_TIMEOUT_SECONDS:-1800}
+    volumes:
+      - ${DATA_ROOT:-./data}/ingestor:/data
+      - ./config:/config:ro
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    depends_on:
+      whisper:
+        condition: service_healthy
+      anythingllm:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - rag
+
+  n8n:
+    image: ${N8N_IMAGE:-n8nio/n8n:2.30.5}
+    container_name: autostuknow-n8n
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:${N8N_PORT:-5678}:5678"
+    environment:
+      TZ: ${TZ:-Asia/Shanghai}
+      GENERIC_TIMEZONE: ${TZ:-Asia/Shanghai}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?请先运行 scripts/init-nas.sh}
+      N8N_HOST: 0.0.0.0
+      N8N_PORT: 5678
+      N8N_PROTOCOL: http
+      N8N_SECURE_COOKIE: ${N8N_SECURE_COOKIE:-false}
+      N8N_WEBHOOK_URL: ${N8N_PUBLIC_URL:?请在 .env 中设置 NAS 的 n8n 地址}
+      N8N_EDITOR_BASE_URL: ${N8N_PUBLIC_URL:?请在 .env 中设置 NAS 的 n8n 地址}
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_PERSONALIZATION_ENABLED: "false"
+      N8N_PYTHON_ENABLED: "false"
+      N8N_UNVERIFIED_PACKAGES_ENABLED: "false"
+      N8N_RUNNERS_TASK_TIMEOUT: "60"
+      N8N_COMPRESSION_NODE_MAX_DECOMPRESSED_SIZE_BYTES: "268435456"
+      N8N_COMPRESSION_NODE_MAX_ZIP_ENTRIES: "1000"
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+      INGESTOR_API_KEY: ${INGESTOR_API_KEY:?请先运行 scripts/init-nas.sh}
+      WEBHOOK_API_KEY: ${WEBHOOK_API_KEY:?请先运行 scripts/init-nas.sh}
+    volumes:
+      - ${DATA_ROOT:-./data}/n8n:/home/node/.n8n
+      - ./n8n/workflows:/opt/autostuknow/workflows:ro
+      - ./scripts/n8n-entrypoint.sh:/opt/autostuknow/n8n-entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/opt/autostuknow/n8n-entrypoint.sh"]
+    depends_on:
+      ingestor:
+        condition: service_healthy
+    networks:
+      - rag
+
+networks:
+  rag:
+    name: autostuknow-rag

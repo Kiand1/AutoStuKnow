@@ -1,0 +1,8 @@
+.git
+.gitignore
+.env
+data
+config/yt-cookies.txt
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache

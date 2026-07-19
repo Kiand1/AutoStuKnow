@@ -1,0 +1,1 @@
+"""AutoStuKnow ingestion service."""

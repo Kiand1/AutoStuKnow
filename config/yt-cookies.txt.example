@@ -1,0 +1,4 @@
+# Netscape HTTP Cookie File
+#
+# 不要把真实 cookies 提交到 Git。请复制为 yt-cookies.txt 后再填写：
+# cp config/yt-cookies.txt.example config/yt-cookies.txt
