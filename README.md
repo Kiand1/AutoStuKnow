@@ -289,7 +289,13 @@ docker compose start
 docker compose logs -f --tail=200 ingestor whisper anythingllm n8n
 ```
 
-拉取最新代码、更新镜像并重建适配层：
+拉取最新代码、更新镜像并重建适配层（NAS 没有安装 Git 时会临时使用 `alpine/git` 容器）：
+
+```bash
+sh scripts/update-nas.sh
+```
+
+也可以手动执行：
 
 ```bash
 git pull --ff-only
