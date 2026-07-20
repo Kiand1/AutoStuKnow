@@ -161,6 +161,8 @@ docker compose up -d --force-recreate ingestor
 
 目标知识库旁也提供“删除知识库”入口。删除前会读取 AnythingLLM 的文档关联数量，统计 AutoStuKnow 管理的目录和任务，并要求输入完整知识库名称。确认后会永久删除该 workspace 的向量、会话、配置、AutoStuKnow 处理记录及 AutoStuKnow 上传的源文档。手工上传或其他工具导入的共享源文件只解除该 workspace 的向量关联，不从 AnythingLLM 公共文档池永久清理，以免影响其他 workspace。
 
+每条已完成或失败的处理记录提供“移动”入口，可移动到同一知识库的其他目录，也可移动到另一个 AnythingLLM workspace。目录内移动只更新 AutoStuKnow 的目录归属和本地 Markdown；跨 workspace 移动会先把文档加入目标 workspace 并确认嵌入成功，再从原 workspace 移除。原 workspace 移除失败时会自动撤销目标端的添加，任务记录仍保留在原位置。正在处理的任务不能移动，目标多级目录需要先在页面创建。
+
 目录只是 AutoStuKnow 对自己导入内容的组织层，不会删除同一 AnythingLLM workspace 中手工上传或由其他工具导入的文档。空目录保存在 `${DATA_ROOT}/ingestor/catalog.json`，已有未分类任务会继续显示在根目录。
 
 Web 用户名默认为 `admin`，密码由 `scripts/init-nas.sh` 随机生成。只在自己的 NAS 终端查看：

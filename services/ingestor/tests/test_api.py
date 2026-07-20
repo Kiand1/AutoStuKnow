@@ -613,3 +613,307 @@ def test_workspace_delete_requires_name_and_cleans_only_managed_source_documents
     assert json.loads(purge_documents.calls[0].request.content) == {
         "names": ["custom-documents/managed.json"]
     }
+
+
+@respx.mock
+def test_knowledge_can_move_to_another_workspace_and_directory(tmp_path: Path) -> None:
+    base_url = "http://anythingllm.test/api"
+    app = create_app(
+        Settings(
+            data_dir=tmp_path,
+            ingestor_api_key=API_KEY,
+            web_ui_username="admin",
+            web_ui_password=INITIAL_WEB_PASSWORD,
+            web_ui_session_secret="test-web-session-secret-that-is-at-least-32-characters",
+            anythingllm_base_url=base_url,
+            anythingllm_api_key="anythingllm-test-key",
+            anythingllm_workspace_slug="research",
+            anythingllm_auto_sync=False,
+        )
+    )
+    manager = app.state.manager
+    job = JobRecord(
+        id="move-knowledge",
+        url="https://youtu.be/hhhhhhhhhhh",
+        canonical_url="https://www.youtube.com/watch?v=hhhhhhhhhhh",
+        workspace_slug="research",
+        category_path="投资/虚拟币",
+        status=JobStatus.completed,
+        stage="completed",
+        document_path="jobs/move-knowledge/document.md",
+        sync_status=SyncStatus.synced,
+        anythingllm_document_location="custom-documents/move.json",
+        title="需要移动的知识",
+    )
+    manager.jobs[job.id] = job
+    manager.storage.save(job)
+    manager.catalog.create("research", "投资/虚拟币")
+    manager.catalog.create("development", "Python/FastAPI")
+    document = manager.storage.job_dir(job.id) / "document.md"
+    document.write_text(
+        "# 标题\n\n## 来源信息\n\n- 转录来源：YouTube 人工字幕\n- 知识目录：投资/虚拟币\n",
+        encoding="utf-8",
+    )
+
+    target_detail_responses = iter(
+        [
+            httpx.Response(
+                200,
+                json={
+                    "workspace": [
+                        {
+                            "id": 2,
+                            "name": "软件开发",
+                            "slug": "development",
+                            "documents": [],
+                            "threads": [],
+                        }
+                    ]
+                },
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "workspace": [
+                        {
+                            "slug": "development",
+                            "documents": [{"docpath": "custom-documents/move.json"}],
+                        }
+                    ]
+                },
+            ),
+        ]
+    )
+    target_details = respx.get(f"{base_url}/v1/workspace/development").mock(
+        side_effect=lambda _: next(target_detail_responses)
+    )
+    target_update = respx.post(
+        f"{base_url}/v1/workspace/development/update-embeddings"
+    ).mock(return_value=httpx.Response(200, json={}))
+    source_update = respx.post(
+        f"{base_url}/v1/workspace/research/update-embeddings"
+    ).mock(return_value=httpx.Response(200, json={}))
+    source_details = respx.get(f"{base_url}/v1/workspace/research").mock(
+        return_value=httpx.Response(
+            200,
+            json={"workspace": [{"slug": "research", "documents": []}]},
+        )
+    )
+
+    client = ready_web_client(app)
+    try:
+        preview = client.get("/ui/api/jobs/move-knowledge/move-preview")
+        moved = client.post(
+            "/ui/api/jobs/move-knowledge/move",
+            json={
+                "target_workspace_slug": "development",
+                "target_category_path": "Python/FastAPI",
+            },
+        )
+    finally:
+        client.__exit__(None, None, None)
+
+    assert preview.status_code == 200
+    assert preview.json()["workspace_slug"] == "research"
+    assert moved.status_code == 200
+    assert moved.json()["workspace_slug"] == "development"
+    assert moved.json()["category_path"] == "Python/FastAPI"
+    assert "- 知识目录：Python/FastAPI" in document.read_text(encoding="utf-8")
+    assert "- 知识目录：投资/虚拟币" not in document.read_text(encoding="utf-8")
+    assert target_details.call_count == 2
+    assert target_update.call_count == 1
+    assert source_update.call_count == 1
+    assert source_details.call_count == 1
+    assert json.loads(target_update.calls[0].request.content) == {
+        "adds": ["custom-documents/move.json"],
+        "deletes": [],
+    }
+    assert json.loads(source_update.calls[0].request.content) == {
+        "adds": [],
+        "deletes": ["custom-documents/move.json"],
+    }
+
+
+@respx.mock
+def test_knowledge_can_move_between_directories_without_reembedding(
+    tmp_path: Path,
+) -> None:
+    base_url = "http://anythingllm.test/api"
+    app = create_app(
+        Settings(
+            data_dir=tmp_path,
+            ingestor_api_key=API_KEY,
+            web_ui_username="admin",
+            web_ui_password=INITIAL_WEB_PASSWORD,
+            web_ui_session_secret="test-web-session-secret-that-is-at-least-32-characters",
+            anythingllm_base_url=base_url,
+            anythingllm_api_key="anythingllm-test-key",
+            anythingllm_workspace_slug="research",
+            anythingllm_auto_sync=False,
+        )
+    )
+    manager = app.state.manager
+    job = JobRecord(
+        id="move-directory",
+        url="https://youtu.be/jjjjjjjjjjj",
+        canonical_url="https://www.youtube.com/watch?v=jjjjjjjjjjj",
+        workspace_slug="research",
+        category_path="投资/虚拟币",
+        status=JobStatus.completed,
+        stage="completed",
+        document_path="jobs/move-directory/document.md",
+        sync_status=SyncStatus.synced,
+        anythingllm_document_location="custom-documents/directory.json",
+        title="知识库内移动",
+    )
+    manager.jobs[job.id] = job
+    manager.storage.save(job)
+    manager.catalog.create("research", "投资/虚拟币")
+    manager.catalog.create("research", "投资/宏观经济")
+    document = manager.storage.job_dir(job.id) / "document.md"
+    document.write_text(
+        "# 标题\n\n- 转录来源：人工字幕\n- 知识目录：投资/虚拟币\n",
+        encoding="utf-8",
+    )
+    workspace_details = respx.get(f"{base_url}/v1/workspace/research").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "workspace": [
+                    {
+                        "id": 1,
+                        "name": "投资研究",
+                        "slug": "research",
+                        "documents": [
+                            {"docpath": "custom-documents/directory.json"}
+                        ],
+                    }
+                ]
+            },
+        )
+    )
+
+    client = ready_web_client(app)
+    try:
+        moved = client.post(
+            "/ui/api/jobs/move-directory/move",
+            json={
+                "target_workspace_slug": "research",
+                "target_category_path": "投资/宏观经济",
+            },
+        )
+    finally:
+        client.__exit__(None, None, None)
+
+    assert moved.status_code == 200
+    assert moved.json()["workspace_slug"] == "research"
+    assert moved.json()["category_path"] == "投资/宏观经济"
+    assert workspace_details.call_count == 1
+    assert "- 知识目录：投资/宏观经济" in document.read_text(encoding="utf-8")
+    persisted = manager.storage.load_all()[job.id]
+    assert persisted.workspace_slug == "research"
+    assert persisted.category_path == "投资/宏观经济"
+
+
+@respx.mock
+def test_cross_workspace_move_rolls_back_target_when_source_removal_fails(
+    tmp_path: Path,
+) -> None:
+    base_url = "http://anythingllm.test/api"
+    app = create_app(
+        Settings(
+            data_dir=tmp_path,
+            ingestor_api_key=API_KEY,
+            web_ui_username="admin",
+            web_ui_password=INITIAL_WEB_PASSWORD,
+            web_ui_session_secret="test-web-session-secret-that-is-at-least-32-characters",
+            anythingllm_base_url=base_url,
+            anythingllm_api_key="anythingllm-test-key",
+            anythingllm_workspace_slug="research",
+            anythingllm_auto_sync=False,
+        )
+    )
+    manager = app.state.manager
+    job = JobRecord(
+        id="rollback-move",
+        url="https://youtu.be/iiiiiiiiiii",
+        canonical_url="https://www.youtube.com/watch?v=iiiiiiiiiii",
+        workspace_slug="research",
+        category_path="投资",
+        status=JobStatus.completed,
+        stage="completed",
+        document_path="jobs/rollback-move/document.md",
+        anythingllm_document_location="custom-documents/rollback.json",
+    )
+    manager.jobs[job.id] = job
+    manager.storage.save(job)
+    manager.catalog.create("development", "Python")
+    document = manager.storage.job_dir(job.id) / "document.md"
+    original = "# 标题\n\n- 转录来源：人工字幕\n- 知识目录：投资\n"
+    document.write_text(original, encoding="utf-8")
+
+    target_detail_responses = iter(
+        [
+            httpx.Response(
+                200,
+                json={
+                    "workspace": [
+                        {
+                            "id": 2,
+                            "name": "软件开发",
+                            "slug": "development",
+                            "documents": [],
+                        }
+                    ]
+                },
+            ),
+            httpx.Response(
+                200,
+                json={
+                    "workspace": [
+                        {
+                            "slug": "development",
+                            "documents": [{"docpath": "custom-documents/rollback.json"}],
+                        }
+                    ]
+                },
+            ),
+        ]
+    )
+    respx.get(f"{base_url}/v1/workspace/development").mock(
+        side_effect=lambda _: next(target_detail_responses)
+    )
+    target_update = respx.post(
+        f"{base_url}/v1/workspace/development/update-embeddings"
+    ).mock(
+        side_effect=[
+            httpx.Response(200, json={}),
+            httpx.Response(200, json={}),
+        ]
+    )
+    respx.post(f"{base_url}/v1/workspace/research/update-embeddings").mock(
+        return_value=httpx.Response(500)
+    )
+
+    client = ready_web_client(app)
+    try:
+        failed = client.post(
+            "/ui/api/jobs/rollback-move/move",
+            json={
+                "target_workspace_slug": "development",
+                "target_category_path": "Python",
+            },
+        )
+    finally:
+        client.__exit__(None, None, None)
+
+    assert failed.status_code == 409
+    assert "从原知识库移除文档失败" in failed.json()["detail"]
+    assert job.workspace_slug == "research"
+    assert job.category_path == "投资"
+    assert document.read_text(encoding="utf-8") == original
+    assert target_update.call_count == 2
+    assert json.loads(target_update.calls[1].request.content) == {
+        "adds": [],
+        "deletes": ["custom-documents/rollback.json"],
+    }

@@ -131,6 +131,24 @@ class WebJobDeleteRequest(BaseModel):
     confirm_job_id: str = Field(min_length=1, max_length=128)
 
 
+class WebJobMoveRequest(BaseModel):
+    target_workspace_slug: str = Field(min_length=1, max_length=128)
+    target_category_path: str = Field(default="", max_length=512)
+
+    @field_validator("target_workspace_slug")
+    @classmethod
+    def normalize_target_workspace_slug(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("目标知识库不能为空")
+        return normalized
+
+    @field_validator("target_category_path")
+    @classmethod
+    def normalize_target_category_path(cls, value: str) -> str:
+        return normalize_directory_path(value)
+
+
 class JobRecord(BaseModel):
     id: str
     url: str

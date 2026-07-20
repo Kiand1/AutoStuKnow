@@ -3,6 +3,7 @@ import json
 import re
 import uuid
 from collections.abc import Iterable
+from contextlib import suppress
 from dataclasses import dataclass
 from html import unescape
 from pathlib import Path
@@ -129,6 +130,84 @@ class JobManager:
             if (job.workspace_slug or self.settings.anythingllm_workspace_slug)
             == workspace_slug
         ]
+
+    def effective_workspace_slug(self, job: JobRecord) -> str:
+        return job.workspace_slug or self.settings.anythingllm_workspace_slug
+
+    async def move_job(
+        self,
+        job_id: str,
+        target_workspace_slug: str,
+        target_category_path: str,
+    ) -> JobRecord:
+        async with self._lock:
+            job = self.get(job_id)
+            if not job:
+                raise KeyError(job_id)
+            if job.status in {JobStatus.queued, JobStatus.running}:
+                raise PipelineError("任务仍在处理中，完成或失败后才能移动")
+            source_workspace_slug = self.effective_workspace_slug(job)
+            if not source_workspace_slug:
+                raise PipelineError("找不到这条知识当前所属的 AnythingLLM workspace")
+            if (
+                target_category_path
+                and target_category_path not in self.directory_paths(target_workspace_slug)
+            ):
+                raise PipelineError("目标目录不存在，请先创建目录")
+            await get_anythingllm_workspace(self.settings, target_workspace_slug)
+            if (
+                source_workspace_slug == target_workspace_slug
+                and job.category_path == target_category_path
+            ):
+                return job
+
+            document_path = self.document_file(job)
+            original_document = None
+            moved_document = None
+            if document_path:
+                try:
+                    original_document = document_path.read_text(encoding="utf-8")
+                except OSError as exc:
+                    raise PipelineError(f"读取本地 Markdown 失败：{exc}") from exc
+                moved_document = update_markdown_category(
+                    original_document,
+                    target_category_path,
+                )
+
+            moved_remotely = False
+            if (
+                job.anythingllm_document_location
+                and source_workspace_slug != target_workspace_slug
+            ):
+                await move_anythingllm_document(
+                    self.settings,
+                    job.anythingllm_document_location,
+                    source_workspace_slug,
+                    target_workspace_slug,
+                )
+                moved_remotely = True
+
+            if document_path and moved_document is not None and moved_document != original_document:
+                try:
+                    temporary = document_path.with_suffix(".md.move.tmp")
+                    temporary.write_text(moved_document, encoding="utf-8")
+                    temporary.replace(document_path)
+                except OSError as exc:
+                    if moved_remotely and job.anythingllm_document_location:
+                        with suppress(PipelineError):
+                            await move_anythingllm_document(
+                                self.settings,
+                                job.anythingllm_document_location,
+                                target_workspace_slug,
+                                source_workspace_slug,
+                            )
+                    raise PipelineError(f"更新本地 Markdown 目录失败：{exc}") from exc
+
+            job.workspace_slug = target_workspace_slug
+            job.category_path = target_category_path
+            self.catalog.register(target_workspace_slug, target_category_path)
+            self._persist(job)
+            return job
 
     async def delete_job(self, job_id: str) -> JobRecord:
         async with self._lock:
@@ -1007,6 +1086,65 @@ async def delete_anythingllm_workspace(
         raise PipelineError(f"AnythingLLM 删除知识库失败：{exc}") from exc
 
 
+async def move_anythingllm_document(
+    settings: Settings,
+    location: str,
+    source_workspace_slug: str,
+    target_workspace_slug: str,
+) -> None:
+    if source_workspace_slug == target_workspace_slug:
+        return
+    if not settings.anythingllm_api_key.strip():
+        raise PipelineError("尚未配置 ANYTHINGLLM_API_KEY，不能跨知识库移动")
+    headers = {"Authorization": f"Bearer {settings.anythingllm_api_key}"}
+    base_url = settings.anythingllm_base_url.rstrip("/")
+    source_slug = quote(source_workspace_slug, safe="")
+    target_slug = quote(target_workspace_slug, safe="")
+    target_update_url = f"{base_url}/v1/workspace/{target_slug}/update-embeddings"
+    source_update_url = f"{base_url}/v1/workspace/{source_slug}/update-embeddings"
+    timeout = httpx.Timeout(
+        float(settings.anythingllm_sync_timeout_seconds),
+        connect=30.0,
+    )
+
+    async def update(url: str, *, adds: list[str], deletes: list[str]) -> None:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            response = await client.post(
+                url,
+                headers=headers,
+                json={"adds": adds, "deletes": deletes},
+            )
+        response.raise_for_status()
+
+    async def contains(workspace_slug: str) -> bool:
+        encoded_slug = quote(workspace_slug, safe="")
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
+            response = await client.get(
+                f"{base_url}/v1/workspace/{encoded_slug}",
+                headers=headers,
+            )
+        response.raise_for_status()
+        return workspace_contains_document(response.json(), workspace_slug, location)
+
+    try:
+        await update(target_update_url, adds=[location], deletes=[])
+        if not await contains(target_workspace_slug):
+            raise PipelineError("目标知识库未确认收到文档")
+    except (httpx.HTTPError, ValueError) as exc:
+        raise PipelineError(f"向目标知识库添加文档失败：{exc}") from exc
+
+    try:
+        await update(source_update_url, adds=[], deletes=[location])
+        if await contains(source_workspace_slug):
+            raise PipelineError("原知识库仍然包含该文档")
+    except (httpx.HTTPError, ValueError, PipelineError) as exc:
+        with suppress(httpx.HTTPError):
+            await update(target_update_url, adds=[], deletes=[location])
+        if isinstance(exc, PipelineError):
+            raise
+        raise PipelineError(f"从原知识库移除文档失败：{exc}") from exc
+
+
 async def upload_to_anythingllm(
     settings: Settings,
     document_path: Path,
@@ -1120,6 +1258,28 @@ def workspace_contains_document(
         for workspace in workspaces
         if isinstance(workspace, dict)
     )
+
+
+def update_markdown_category(content: str, category_path: str) -> str:
+    trailing_newline = content.endswith("\n")
+    lines = [line for line in content.splitlines() if not line.startswith("- 知识目录：")]
+    if category_path:
+        insert_at = next(
+            (
+                index + 1
+                for index, line in enumerate(lines)
+                if line.startswith("- 转录来源：")
+            ),
+            None,
+        )
+        if insert_at is None:
+            insert_at = next(
+                (index + 1 for index, line in enumerate(lines) if line == "## 来源信息"),
+                len(lines),
+            )
+        lines.insert(insert_at, f"- 知识目录：{category_path}")
+    updated = "\n".join(lines)
+    return f"{updated}\n" if trailing_newline else updated
 
 
 def render_markdown(

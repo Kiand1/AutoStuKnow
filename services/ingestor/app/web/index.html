@@ -94,6 +94,7 @@
     .danger { min-height: 44px; padding: 0 18px; border: 0; border-radius: 12px; color: #fff; background: var(--danger); font-weight: 750; }
     .danger:disabled { cursor: not-allowed; opacity: .45; }
     .danger-ghost { min-height: 34px; padding: 0 11px; border: 1px solid #efc9c6; border-radius: 10px; color: var(--danger); background: var(--danger-soft); font-size: 12px; font-weight: 750; }
+    .small-action { min-height: 34px; padding: 0 11px; font-size: 12px; }
     .wide { width: 100%; margin-top: 22px; }
     .form-actions { display: flex; gap: 10px; margin-top: 22px; }
     .form-actions .primary { flex: 1; }
@@ -311,6 +312,25 @@
     </main>
   </section>
   <div id="toast" class="toast" role="status"></div>
+  <dialog id="moveDialog">
+    <div class="dialog-body">
+      <h2>移动知识</h2>
+      <p id="moveTitle" class="subtle"></p>
+      <div class="field">
+        <label for="moveWorkspace">目标知识库</label>
+        <select id="moveWorkspace"></select>
+      </div>
+      <div class="field">
+        <label for="moveDirectory">目标目录</label>
+        <select id="moveDirectory"></select>
+      </div>
+      <p id="moveMessage" class="message" role="alert"></p>
+      <div class="dialog-actions">
+        <button id="cancelMoveButton" class="ghost" type="button">取消</button>
+        <button id="acceptMoveButton" class="primary" type="button">确认移动</button>
+      </div>
+    </div>
+  </dialog>
   <dialog id="confirmDialog">
     <div class="dialog-body">
       <h2 id="confirmTitle">确认删除</h2>
@@ -337,6 +357,9 @@
     const directories = new Map();
     let pollTimer = null;
     let passwordChangeRequired = false;
+    let movingJobId = '';
+    let movingSourceWorkspace = '';
+    let movingSourceDirectory = '';
     let confirmationResolver = null;
     let requiredConfirmationText = '';
 
@@ -503,6 +526,39 @@
       return workspaces.get(slug)?.name || slug || '未指定';
     }
 
+    function updateMoveButtonState() {
+      const targetWorkspace = document.querySelector('#moveWorkspace').value;
+      const targetDirectory = document.querySelector('#moveDirectory').value;
+      document.querySelector('#acceptMoveButton').disabled = !targetWorkspace || (
+        targetWorkspace === movingSourceWorkspace && targetDirectory === movingSourceDirectory
+      );
+    }
+
+    async function loadMoveDirectories(workspaceSlug, selectedPath = '') {
+      const select = document.querySelector('#moveDirectory');
+      const message = document.querySelector('#moveMessage');
+      document.querySelector('#acceptMoveButton').disabled = true;
+      select.disabled = true;
+      message.textContent = '正在读取目标目录…';
+      try {
+        const result = await api(`/ui/api/directories?workspace_slug=${encodeURIComponent(workspaceSlug)}`);
+        select.replaceChildren(new Option('根目录（不分类）', ''));
+        result.directories.forEach(directory => {
+          const indent = '\u00a0\u00a0'.repeat(Math.max(0, directory.depth - 1));
+          const label = `${indent}└ ${directory.path.split('/').at(-1)} (${directory.total_jobs})`;
+          select.add(new Option(label, directory.path));
+        });
+        const available = result.directories.some(directory => directory.path === selectedPath);
+        select.value = available ? selectedPath : '';
+        select.disabled = false;
+        message.textContent = '';
+        updateMoveButtonState();
+      } catch (error) {
+        select.replaceChildren(new Option('目录读取失败', ''));
+        message.textContent = error.message;
+      }
+    }
+
     function directoryStorageKey(workspaceSlug) {
       return `autostuknow_directory_${workspaceSlug}`;
     }
@@ -572,7 +628,7 @@
             <div class="job-title"><strong>${escapeHtml(job.title || '正在读取视频…')}</strong><div class="job-url">${escapeHtml(job.canonical_url || job.url)}</div></div>
             <div class="job-state">
               <span class="badge ${badgeClass}">${escapeHtml(stage)}</span>
-              ${running ? '' : `<button class="danger-ghost" type="button" data-delete-job="${escapeHtml(job.id)}">删除</button>`}
+              ${running ? '' : `<button class="secondary small-action" type="button" data-move-job="${escapeHtml(job.id)}">移动</button><button class="danger-ghost" type="button" data-delete-job="${escapeHtml(job.id)}">删除</button>`}
             </div>
           </div>
           <div class="progress"><span style="width:${progress}%"></span></div>
@@ -886,6 +942,72 @@
       } catch (error) {
         button.disabled = false;
         showToast(error.message);
+      }
+    });
+    jobsElement.addEventListener('click', async event => {
+      const button = event.target.closest('[data-move-job]');
+      if (!button) return;
+      const jobId = button.dataset.moveJob;
+      const message = document.querySelector('#moveMessage');
+      try {
+        const preview = await api(`/ui/api/jobs/${encodeURIComponent(jobId)}/move-preview`);
+        if (preview.active) { showToast('这条知识仍在处理中，暂时不能移动'); return; }
+        movingJobId = jobId;
+        movingSourceWorkspace = preview.workspace_slug;
+        movingSourceDirectory = preview.category_path || '';
+        document.querySelector('#moveTitle').textContent = `${preview.title}｜当前位置：${workspaceName(preview.workspace_slug)} / ${preview.category_path || '根目录'}`;
+        const workspaceSelect = document.querySelector('#moveWorkspace');
+        workspaceSelect.replaceChildren();
+        [...workspaces.values()].forEach(workspace => {
+          workspaceSelect.add(new Option(workspace.name, workspace.slug));
+        });
+        if (![...workspaces.keys()].includes(preview.workspace_slug)) {
+          workspaceSelect.add(new Option(preview.workspace_slug, preview.workspace_slug));
+        }
+        workspaceSelect.value = preview.workspace_slug;
+        message.textContent = '';
+        await loadMoveDirectories(preview.workspace_slug, movingSourceDirectory);
+        document.querySelector('#moveDialog').showModal();
+      } catch (error) {
+        message.textContent = error.message;
+        showToast(error.message);
+      }
+    });
+    document.querySelector('#moveWorkspace').addEventListener('change', async event => {
+      const selectedPath = event.target.value === movingSourceWorkspace ? movingSourceDirectory : '';
+      await loadMoveDirectories(event.target.value, selectedPath);
+    });
+    document.querySelector('#moveDirectory').addEventListener('change', updateMoveButtonState);
+    document.querySelector('#cancelMoveButton').addEventListener('click', () => {
+      document.querySelector('#moveDialog').close();
+    });
+    document.querySelector('#moveDialog').addEventListener('cancel', event => {
+      event.preventDefault();
+      document.querySelector('#moveDialog').close();
+    });
+    document.querySelector('#acceptMoveButton').addEventListener('click', async () => {
+      const button = document.querySelector('#acceptMoveButton');
+      const message = document.querySelector('#moveMessage');
+      const targetWorkspace = document.querySelector('#moveWorkspace').value;
+      const targetDirectory = document.querySelector('#moveDirectory').value;
+      button.disabled = true;
+      message.textContent = '正在移动知识…';
+      try {
+        const moved = await api(`/ui/api/jobs/${encodeURIComponent(movingJobId)}/move`, {
+          method: 'POST',
+          body: JSON.stringify({
+            target_workspace_slug: targetWorkspace,
+            target_category_path: targetDirectory
+          })
+        });
+        jobs.set(moved.id, moved);
+        document.querySelector('#moveDialog').close();
+        await refreshJobs();
+        await loadDirectories(document.querySelector('#directory').value);
+        showToast(`已移动到 ${workspaceName(targetWorkspace)} / ${targetDirectory || '根目录'}`);
+      } catch (error) {
+        message.textContent = error.message;
+        updateMoveButtonState();
       }
     });
     document.querySelector('#confirmInput').addEventListener('input', event => {

@@ -16,6 +16,7 @@ from .models import (
     WebDirectoryDeleteRequest,
     WebDirectoryRequest,
     WebJobDeleteRequest,
+    WebJobMoveRequest,
     WebLoginRequest,
     WebPasswordChangeRequest,
     WebWorkspaceCreateRequest,
@@ -463,6 +464,46 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "synced": bool(job.anythingllm_document_location),
             "active": job.status.value in {"queued", "running"},
         }
+
+    @application.get("/ui/api/jobs/{job_id}/move-preview", include_in_schema=False)
+    async def web_job_move_preview(
+        job_id: str,
+        _: str = Depends(require_web_session),
+    ) -> dict[str, object]:
+        job = manager.get(job_id)
+        if not job:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识不存在")
+        return {
+            "job_id": job.id,
+            "title": job.title or job.canonical_url,
+            "workspace_slug": manager.effective_workspace_slug(job),
+            "category_path": job.category_path,
+            "synced": bool(job.anythingllm_document_location),
+            "active": job.status.value in {"queued", "running"},
+        }
+
+    @application.post("/ui/api/jobs/{job_id}/move", include_in_schema=False)
+    async def web_move_job(
+        job_id: str,
+        move_request: WebJobMoveRequest,
+        _: str = Depends(require_web_session),
+    ) -> JobRecord:
+        try:
+            return await manager.move_job(
+                job_id,
+                move_request.target_workspace_slug,
+                move_request.target_category_path,
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="知识不存在",
+            ) from exc
+        except PipelineError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
 
     @application.delete("/ui/api/jobs/{job_id}", include_in_schema=False)
     async def web_delete_job(
