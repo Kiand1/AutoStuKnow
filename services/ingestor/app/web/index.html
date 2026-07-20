@@ -975,7 +975,7 @@
         if (scope === 'selected') text = `已勾选 ${count} 条原始知识；可跨目录勾选。`;
         if (scope === 'directory') text = selectedLibraryPath
           ? `将融合目录“${selectedLibraryPath}”及子目录中的 ${count} 条原始知识。`
-          : '请先在上方目录树选择一个非根目录。';
+          : '请先在下方“知识库预览”的目录树中选择一个非根目录。';
         if (scope === 'workspace') text = `将融合“${workspaceName(workspaceSlug)}”中的 ${count} 条原始知识。`;
       }
       document.querySelector('#fusionSelection').textContent = text;
