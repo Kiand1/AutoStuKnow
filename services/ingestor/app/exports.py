@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import re
@@ -18,22 +19,85 @@ _WINDOWS_RESERVED_NAMES = {
     *(f"COM{index}" for index in range(1, 10)),
     *(f"LPT{index}" for index in range(1, 10)),
 }
+MAX_ARCHIVE_PATH_UTF8_BYTES = 220
+MAX_EXPORT_SEGMENT_UTF8_BYTES = 80
+MAX_ARCHIVE_DIRECTORY_SEGMENT_UTF8_BYTES = 60
+MAX_KNOWLEDGE_TITLE_UTF8_BYTES = 120
+MIN_ARCHIVE_FILENAME_UTF8_BYTES = 40
 
 
-def safe_export_segment(value: str | None, fallback: str) -> str:
+def truncate_utf8(value: str, max_bytes: int) -> str:
+    encoded = value.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return value
+    digest = hashlib.sha1(encoded).hexdigest()[:6]
+    suffix = f"~{digest}"
+    head_bytes = max_bytes - len(suffix)
+    if head_bytes <= 0:
+        return digest[:max_bytes]
+    head = encoded[:head_bytes].decode("utf-8", errors="ignore").rstrip(" .")
+    return f"{head}{suffix}" if head else digest[:max_bytes]
+
+
+def safe_export_segment(
+    value: str | None,
+    fallback: str,
+    max_bytes: int = MAX_EXPORT_SEGMENT_UTF8_BYTES,
+) -> str:
     cleaned = _INVALID_EXPORT_CHARACTERS.sub("_", (value or "").strip())
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
     if not cleaned or cleaned in {".", ".."}:
         cleaned = fallback
     if cleaned.split(".", 1)[0].upper() in _WINDOWS_RESERVED_NAMES:
         cleaned = f"_{cleaned}"
-    return cleaned[:100].rstrip(" .") or fallback
+    cleaned = cleaned[:100].rstrip(" .") or fallback
+    return truncate_utf8(cleaned, max_bytes)
 
 
-def knowledge_filename(job: JobRecord) -> str:
-    title = safe_export_segment(job.title, "未命名知识")
+def knowledge_filename(
+    job: JobRecord,
+    max_title_bytes: int = MAX_KNOWLEDGE_TITLE_UTF8_BYTES,
+) -> str:
+    title = safe_export_segment(job.title, "未命名知识", max_bytes=max_title_bytes)
     identifier = safe_export_segment(job.id[:12], "knowledge")
     return f"{title}__{identifier}.md"
+
+
+def safe_archive_directory(root_name: str, directory_path: str) -> str:
+    normalized = normalize_directory_path(directory_path)
+    if not normalized:
+        return ""
+    raw_segments = normalized.split("/")
+    separators = len(raw_segments) - 1
+    available = (
+        MAX_ARCHIVE_PATH_UTF8_BYTES
+        - len(root_name.encode("utf-8"))
+        - 2
+        - MIN_ARCHIVE_FILENAME_UTF8_BYTES
+        - separators
+    )
+    segment_budget = max(
+        8,
+        min(
+            MAX_ARCHIVE_DIRECTORY_SEGMENT_UTF8_BYTES,
+            available // len(raw_segments),
+        ),
+    )
+    return "/".join(
+        safe_export_segment(segment, "directory", max_bytes=segment_budget)
+        for segment in raw_segments
+    )
+
+
+def archive_knowledge_filename(job: JobRecord, archive_prefix: str) -> str:
+    identifier = safe_export_segment(job.id[:12], "knowledge")
+    suffix = f"__{identifier}.md"
+    title_budget = (
+        MAX_ARCHIVE_PATH_UTF8_BYTES
+        - len(archive_prefix.encode("utf-8"))
+        - len(suffix.encode("utf-8"))
+    )
+    return knowledge_filename(job, max_title_bytes=max(8, title_budget))
 
 
 def archive_download_name(workspace_slug: str, selected_path: str = "") -> str:
@@ -52,7 +116,7 @@ def build_knowledge_archive(
     selected_path: str = "",
 ) -> Path:
     normalized_scope = normalize_directory_path(selected_path)
-    root_name = safe_export_segment(workspace_slug, "knowledge-base")
+    root_name = safe_export_segment(workspace_slug, "knowledge-base", max_bytes=60)
     scoped_jobs = [
         (job, document)
         for job, document in jobs
@@ -86,22 +150,18 @@ def build_knowledge_archive(
             archive.writestr(f"{root_name}/", "")
             used_directories.add(f"{root_name}/".casefold())
             for directory in scoped_directories:
-                safe_directory = "/".join(
-                    safe_export_segment(segment, "directory")
-                    for segment in directory.split("/")
-                )
+                safe_directory = safe_archive_directory(root_name, directory)
                 archive_directory = f"{root_name}/{safe_directory}/"
                 if archive_directory.casefold() not in used_directories:
                     archive.writestr(archive_directory, "")
                     used_directories.add(archive_directory.casefold())
 
             for job, document_path in scoped_jobs:
-                safe_directory = "/".join(
-                    safe_export_segment(segment, "directory")
-                    for segment in normalize_directory_path(job.category_path).split("/")
-                    if segment
+                safe_directory = safe_archive_directory(root_name, job.category_path)
+                archive_prefix = (
+                    f"{root_name}/{safe_directory}/" if safe_directory else f"{root_name}/"
                 )
-                base_name = knowledge_filename(job)
+                base_name = archive_knowledge_filename(job, archive_prefix)
                 relative_name = f"{safe_directory}/{base_name}" if safe_directory else base_name
                 archive_name = f"{root_name}/{relative_name}"
                 duplicate_index = 2
