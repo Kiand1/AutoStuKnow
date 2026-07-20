@@ -12,6 +12,7 @@ from starlette.background import BackgroundTask
 from .catalog import normalize_directory_path, path_is_within
 from .config import Settings
 from .exports import archive_download_name, build_knowledge_archive, knowledge_filename
+from .mcp_server import McpAccessController, McpBearerAuthMiddleware, create_mcp_server
 from .models import (
     BatchJobRequest,
     JobRecord,
@@ -22,6 +23,7 @@ from .models import (
     WebJobDeleteRequest,
     WebJobMoveRequest,
     WebLoginRequest,
+    WebMcpSettingsRequest,
     WebPasswordChangeRequest,
     WebWorkspaceCreateRequest,
     WebWorkspaceDeleteRequest,
@@ -47,6 +49,8 @@ from .web_auth import (
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings or Settings()
     manager = JobManager(resolved_settings)
+    mcp_access = McpAccessController(resolved_settings.data_dir, resolved_settings.mcp_enabled)
+    mcp_server = create_mcp_server(resolved_settings, manager)
     credential_store = WebCredentialStore(
         resolved_settings.data_dir,
         resolved_settings.web_ui_password,
@@ -60,7 +64,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-        yield
+        async with mcp_server.session_manager.run():
+            yield
 
     application = FastAPI(
         title="AutoStuKnow Ingestor",
@@ -72,6 +77,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.manager = manager
     application.state.credential_store = credential_store
     application.state.session_signer = session_signer
+    application.state.mcp_server = mcp_server
+    application.state.mcp_access = mcp_access
 
     def available_document(job: JobRecord) -> tuple[Path | None, int]:
         document_path = manager.document_file(job)
@@ -536,6 +543,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response.headers["Cache-Control"] = "no-store"
         return response
 
+    def mcp_settings_payload(request: Request) -> dict[str, str | bool]:
+        endpoint = f"{str(request.base_url).rstrip('/')}/mcp"
+        return {
+            "enabled": mcp_access.enabled,
+            "endpoint": endpoint,
+            "authentication": "Bearer token",
+            "dedicated_key": bool(resolved_settings.mcp_api_key),
+        }
+
+    @application.get("/ui/api/mcp", include_in_schema=False)
+    async def web_mcp_settings(
+        request: Request,
+        _: str = Depends(require_web_session),
+    ) -> dict[str, str | bool]:
+        return mcp_settings_payload(request)
+
+    @application.post("/ui/api/mcp", include_in_schema=False)
+    async def web_update_mcp_settings(
+        request: Request,
+        update: WebMcpSettingsRequest,
+        _: str = Depends(require_web_session),
+    ) -> dict[str, str | bool]:
+        mcp_access.set_enabled(update.enabled)
+        return mcp_settings_payload(request)
+
     @application.post("/ui/api/jobs/batch", include_in_schema=False)
     async def web_batch_jobs(
         request: BatchJobRequest,
@@ -834,6 +866,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except PipelineError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
+    # Keep this catch-all mount last so the existing UI/API routes win first.
+    application.mount(
+        "/",
+        McpBearerAuthMiddleware(
+            mcp_server.streamable_http_app(),
+            resolved_settings.effective_mcp_api_key,
+            mcp_access,
+        ),
+        name="mcp",
+    )
     return application
 
 

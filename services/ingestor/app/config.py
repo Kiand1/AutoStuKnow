@@ -13,6 +13,8 @@ class Settings(BaseSettings):
 
     data_dir: Path = Path("/data")
     ingestor_api_key: str = Field(min_length=24)
+    mcp_api_key: str = ""
+    mcp_enabled: bool = False
     web_ui_username: str = Field(min_length=3, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
     web_ui_password: str = Field(min_length=12, max_length=256)
     web_ui_session_secret: str = Field(min_length=32)
@@ -53,6 +55,18 @@ class Settings(BaseSettings):
             raise ValueError("INGESTOR_API_KEY is still a placeholder; generate a random key")
         return value
 
+    @field_validator("mcp_api_key")
+    @classmethod
+    def validate_mcp_api_key(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            return ""
+        if normalized.startswith("replace-with-"):
+            raise ValueError("MCP_API_KEY is still a placeholder; run scripts/init-nas.sh")
+        if len(normalized) < 24:
+            raise ValueError("MCP_API_KEY must contain at least 24 characters")
+        return normalized
+
     @field_validator("web_ui_password", "web_ui_session_secret")
     @classmethod
     def reject_web_placeholders(cls, value: str) -> str:
@@ -75,3 +89,8 @@ class Settings(BaseSettings):
     @property
     def anythingllm_sync_enabled(self) -> bool:
         return bool(self.anythingllm_auto_sync and self.anythingllm_api_key.strip())
+
+    @property
+    def effective_mcp_api_key(self) -> str:
+        """Keep upgraded deployments working until init-nas generates a dedicated key."""
+        return self.mcp_api_key or self.ingestor_api_key

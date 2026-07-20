@@ -74,6 +74,8 @@ services:
       DENO_DIR: /data/cache/deno
       DATA_DIR: /data
       INGESTOR_API_KEY: ${INGESTOR_API_KEY:?请先运行 scripts/init-nas.sh}
+      MCP_API_KEY: ${MCP_API_KEY:-}
+      MCP_ENABLED: ${MCP_ENABLED:-false}
       WEB_UI_USERNAME: ${WEB_UI_USERNAME:-admin}
       WEB_UI_PASSWORD: ${WEB_UI_PASSWORD:?请先运行 scripts/init-nas.sh}
       WEB_UI_SESSION_SECRET: ${WEB_UI_SESSION_SECRET:?请先运行 scripts/init-nas.sh}

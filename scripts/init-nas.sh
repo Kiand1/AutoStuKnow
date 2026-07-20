@@ -45,11 +45,13 @@ replace_placeholder ANYTHINGLLM_JWT_SECRET replace-with-a-random-secret
 replace_placeholder N8N_ENCRYPTION_KEY replace-with-a-different-random-secret
 replace_placeholder INGESTOR_API_KEY replace-with-a-third-random-secret
 replace_placeholder WEBHOOK_API_KEY replace-with-a-fourth-random-secret
+replace_placeholder MCP_API_KEY replace-with-a-mcp-random-secret
 replace_placeholder WEB_UI_PASSWORD replace-with-a-web-ui-password
 replace_placeholder WEB_UI_SESSION_SECRET replace-with-a-web-ui-session-secret
 ensure_default WEB_UI_USERNAME admin
 ensure_default WEB_UI_SESSION_TTL_HOURS 24
 ensure_default WEB_UI_SECURE_COOKIE false
+ensure_default MCP_ENABLED false
 ensure_default PREFER_YOUTUBE_SUBTITLES true
 ensure_default ALLOW_AUTOMATIC_SUBTITLES true
 rm -f .env.bak

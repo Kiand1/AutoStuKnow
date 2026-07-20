@@ -142,6 +142,25 @@
     .flow-num { width: 27px; height: 27px; display: grid; place-items: center; border-radius: 50%; background: var(--brand-soft); color: var(--brand); font-size: 12px; font-weight: 800; }
     .flow-row strong { display: block; font-size: 14px; }
     .flow-row span { display: block; margin-top: 3px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .mcp-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 22px; align-items: center; margin-top: 28px; padding: 22px 24px; }
+    .mcp-card h2 { display: flex; align-items: center; gap: 9px; margin: 0 0 7px; }
+    .mcp-status-dot { width: 9px; height: 9px; border-radius: 50%; background: #a8b3ad; box-shadow: 0 0 0 4px rgba(168, 179, 173, .16); }
+    .mcp-status-dot.enabled { background: #25a56f; box-shadow: 0 0 0 4px rgba(37, 165, 111, .14); }
+    .mcp-description { margin: 0; }
+    .mcp-endpoint-row { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin-top: 12px; }
+    .mcp-endpoint { max-width: 100%; padding: 7px 10px; overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: 9px; color: var(--brand-dark); background: #f8faf8; font: 12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .mcp-key-note { display: block; margin-top: 9px; color: var(--muted); font-size: 12px; }
+    .mcp-copy { min-height: 34px; padding: 0 11px; }
+    .mcp-control { display: flex; align-items: center; gap: 12px; min-width: 130px; justify-content: flex-end; }
+    .mcp-control-label { color: var(--muted); font-size: 13px; font-weight: 750; }
+    .switch { position: relative; display: inline-flex; width: 52px; height: 30px; flex: 0 0 auto; }
+    .switch input { width: 1px; height: 1px; opacity: 0; position: absolute; }
+    .switch-track { width: 52px; height: 30px; border-radius: 999px; background: #cbd4cf; transition: .2s; }
+    .switch-track::after { content: ''; display: block; width: 24px; height: 24px; margin: 3px; border-radius: 50%; background: #fff; box-shadow: 0 2px 8px rgba(20, 42, 32, .25); transition: transform .2s; }
+    .switch input:checked + .switch-track { background: var(--brand); }
+    .switch input:checked + .switch-track::after { transform: translateX(22px); }
+    .switch input:focus-visible + .switch-track { box-shadow: 0 0 0 3px rgba(23, 107, 77, .18); }
+    .switch input:disabled + .switch-track { cursor: wait; opacity: .55; }
     .library-card { margin-top: 28px; overflow: hidden; }
     .library-head { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 22px 24px; border-bottom: 1px solid var(--line); }
     .library-head h2 { margin: 0 0 5px; font-size: 22px; }
@@ -203,6 +222,8 @@
     .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
     @media (max-width: 760px) {
       .grid { grid-template-columns: 1fr; }
+      .mcp-card { grid-template-columns: 1fr; align-items: stretch; }
+      .mcp-control { justify-content: flex-start; }
       .library-head, .library-folder-head, .library-document, .content-preview-head { align-items: stretch; flex-direction: column; }
       .library-head-actions, .library-document-actions, .content-preview-actions { width: 100%; }
       .library-head-actions button, .library-document-actions button, .content-preview-actions button { flex: 1; }
@@ -346,6 +367,24 @@
           </div>
         </aside>
       </div>
+      <section class="card mcp-card" aria-labelledby="mcpTitle">
+        <div>
+          <h2 id="mcpTitle"><span id="mcpStatusDot" class="mcp-status-dot" aria-hidden="true"></span>MCP 知识库接口</h2>
+          <p id="mcpDescription" class="subtle mcp-description">正在读取 MCP 状态…</p>
+          <div class="mcp-endpoint-row">
+            <code id="mcpEndpoint" class="mcp-endpoint">-</code>
+            <button id="copyMcpEndpointButton" class="ghost mcp-copy" type="button" disabled>复制地址</button>
+          </div>
+          <small class="mcp-key-note">访问令牌位于 NAS 项目 .env 中的 MCP_API_KEY；页面不会显示密钥。</small>
+        </div>
+        <div class="mcp-control">
+          <span id="mcpControlLabel" class="mcp-control-label">已关闭</span>
+          <label class="switch" title="开启或关闭 MCP 知识库接口">
+            <input id="mcpEnabled" type="checkbox" role="switch" aria-label="开启 MCP 知识库接口" disabled>
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+        </div>
+      </section>
       <section class="card library-card" aria-labelledby="libraryTitle">
         <div class="library-head">
           <div>
@@ -553,8 +592,49 @@
       document.querySelector('#accountName').textContent = username;
       document.querySelector('#password').value = '';
       await loadWorkspaces();
+      await loadMcpSettings();
       await refreshJobs();
       startPolling();
+    }
+
+    function renderMcpSettings(settings) {
+      const enabled = Boolean(settings.enabled);
+      const toggle = document.querySelector('#mcpEnabled');
+      const endpoint = document.querySelector('#mcpEndpoint');
+      toggle.checked = enabled;
+      toggle.disabled = false;
+      endpoint.textContent = settings.endpoint || '-';
+      document.querySelector('#copyMcpEndpointButton').disabled = !settings.endpoint;
+      document.querySelector('#mcpStatusDot').classList.toggle('enabled', enabled);
+      document.querySelector('#mcpControlLabel').textContent = enabled ? '已开启' : '已关闭';
+      document.querySelector('#mcpDescription').textContent = enabled
+        ? 'Codex、Claude Code 等客户端现在可以通过 Bearer Token 只读检索 AnythingLLM 知识库。'
+        : '接口已停止接受连接；视频处理、目录管理和 AnythingLLM 不受影响。';
+    }
+
+    async function loadMcpSettings() {
+      const toggle = document.querySelector('#mcpEnabled');
+      toggle.disabled = true;
+      try {
+        renderMcpSettings(await api('/ui/api/mcp'));
+      } catch (error) {
+        document.querySelector('#mcpDescription').textContent = `读取 MCP 状态失败：${error.message}`;
+      }
+    }
+
+    async function copyText(value) {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(value);
+        return;
+      }
+      const input = document.createElement('textarea');
+      input.value = value;
+      input.style.position = 'fixed';
+      input.style.opacity = '0';
+      document.body.appendChild(input);
+      input.select();
+      document.execCommand('copy');
+      input.remove();
     }
 
     function showToast(message) {
@@ -1364,6 +1444,31 @@
     document.querySelector('#refreshButton').addEventListener('click', async () => {
       await refreshJobs();
       await loadLibrary(selectedLibraryPath);
+    });
+    document.querySelector('#mcpEnabled').addEventListener('change', async event => {
+      const toggle = event.target;
+      const enabled = toggle.checked;
+      toggle.disabled = true;
+      try {
+        const settings = await api('/ui/api/mcp', {
+          method: 'POST',
+          body: JSON.stringify({ enabled })
+        });
+        renderMcpSettings(settings);
+        showToast(enabled ? 'MCP 接口已开启' : 'MCP 接口已关闭');
+      } catch (error) {
+        await loadMcpSettings();
+        showToast(`更新 MCP 状态失败：${error.message}`);
+      }
+    });
+    document.querySelector('#copyMcpEndpointButton').addEventListener('click', async () => {
+      const endpoint = document.querySelector('#mcpEndpoint').textContent;
+      try {
+        await copyText(endpoint);
+        showToast('MCP 地址已复制');
+      } catch {
+        showToast('复制失败，请手动选择地址');
+      }
     });
     document.querySelector('#changePasswordButton').addEventListener('click', () => {
       showPasswordChange(document.querySelector('#accountName').textContent, false);

@@ -204,7 +204,8 @@ def test_web_password_can_be_changed_again_and_invalidates_other_sessions(tmp_pa
             anythingllm_auto_sync=False,
         )
     )
-    with TestClient(app) as primary, TestClient(app) as secondary:
+    secondary = TestClient(app)
+    with TestClient(app) as primary:
         primary.post(
             "/ui/api/login",
             json={"username": "admin", "password": INITIAL_WEB_PASSWORD},
@@ -226,6 +227,7 @@ def test_web_password_can_be_changed_again_and_invalidates_other_sessions(tmp_pa
             },
         )
         stale_session = secondary.get("/ui/api/session")
+    secondary.close()
 
     assert wrong_current.status_code == 400
     assert changed.status_code == 200

@@ -179,6 +179,71 @@ sudo sed -n 's/^WEB_UI_USERNAME=//p; s/^WEB_UI_PASSWORD=//p' /volume2/docker/aut
 
 登录状态使用 HttpOnly、SameSite=Strict 的签名 Cookie；修改密码后旧会话会自动失效。直接使用局域网 HTTP 时 `WEB_UI_SECURE_COOKIE=false`；配置 HTTPS 反向代理后改为 `true` 并重建 Ingestor。
 
+## 让其他 AI 通过 MCP 使用知识库
+
+登录 `http://NAS_IP:8090/ui` 后，可在“MCP 知识库接口”卡片中随时开启或关闭接口。开关状态保存在 `${DATA_ROOT}/ingestor/mcp-settings.json`，重启或重建容器后仍会保留；关闭只会停止 MCP 连接，不影响视频处理、页面管理或 AnythingLLM。
+
+MCP 地址为：
+
+```text
+http://NAS_IP:8090/mcp
+```
+
+接口使用 Streamable HTTP 和 Bearer Token，并只提供读取能力：
+
+- `list_workspaces`：列出 AnythingLLM 知识库。
+- `list_knowledge_tree`：查看某个知识库中由 AutoStuKnow 管理的多级目录和知识。
+- `search_knowledge`：调用 AnythingLLM 向量检索，可选目录及子目录过滤；不指定目录时也能检索手工上传到 AnythingLLM 的文档。
+- `get_knowledge`：按处理记录 ID 读取一篇完整的 AutoStuKnow Markdown 笔记。
+
+首次运行 `scripts/init-nas.sh` 会生成独立的 `MCP_API_KEY`。只在自己的 NAS 终端查看，不要把密钥放进 Git、截图或聊天记录：
+
+```bash
+sudo sed -n 's/^MCP_API_KEY=//p' /volume2/docker/autoStuKnow/.env
+```
+
+### Codex
+
+先在本机设置环境变量。PowerShell 示例：
+
+```powershell
+$env:AUTOSTUKNOW_MCP_TOKEN = '从 NAS 查看得到的 MCP_API_KEY'
+```
+
+然后在 `$HOME/.codex/config.toml` 添加：
+
+```toml
+[mcp_servers.autostuknow]
+url = "http://192.168.5.20:8090/mcp"
+bearer_token_env_var = "AUTOSTUKNOW_MCP_TOKEN"
+```
+
+重启 Codex 后，可让它“先调用 AutoStuKnow 的 `search_knowledge`，再根据知识库回答”。配置格式参见 [Codex MCP 文档](https://learn.chatgpt.com/docs/extend/mcp)。
+
+### Claude Code
+
+在项目的 `.mcp.json` 中添加以下内容，并在启动 Claude Code 前设置同名环境变量：
+
+```json
+{
+  "mcpServers": {
+    "autostuknow": {
+      "type": "http",
+      "url": "http://192.168.5.20:8090/mcp",
+      "headers": {
+        "Authorization": "Bearer ${AUTOSTUKNOW_MCP_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+### ChatGPT
+
+ChatGPT 云端无法直接访问 `192.168.x.x` 局域网地址。若要在 ChatGPT 自定义连接器中使用，必须先通过 HTTPS 反向代理或安全隧道提供一个可从互联网访问的 MCP 地址，并继续保留身份验证；不要直接把 NAS 的 `8090` 端口裸露到公网。仅在同一局域网使用时，Codex 和 Claude Code 可直接连接上面的 NAS 地址。
+
+本接口是 AnythingLLM 的外部只读适配层；AnythingLLM 自带的 MCP 功能方向相反，它让 AnythingLLM 作为客户端调用其他 MCP 工具，并不会自动把现有 workspace 发布给其他 AI。
+
 ### 通过 n8n 自动化接口
 
 n8n 启动时会导入并发布带 Header Auth 的 `AutoStuKnow - YouTube to RAG` 工作流。

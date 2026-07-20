@@ -61,6 +61,10 @@ class WebPasswordChangeRequest(BaseModel):
     new_password: str = Field(min_length=8, max_length=256)
 
 
+class WebMcpSettingsRequest(BaseModel):
+    enabled: bool
+
+
 class WebWorkspaceCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=100)
 
