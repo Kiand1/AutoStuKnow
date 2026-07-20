@@ -110,6 +110,8 @@ ANYTHINGLLM_SYNC_TIMEOUT_SECONDS=1800
 
 `ANYTHINGLLM_WORKSPACE_SLUG` 是直接调用 API 或 n8n 时的默认目标。8090 页面会实时读取 AnythingLLM 的全部 workspace，每批内容必须自行选择目标知识库，也可以在页面创建新知识库，不使用任何写死的分类名称。
 
+AnythingLLM 的 workspace 本身是一级结构，因此 AutoStuKnow 在每个 workspace 内维护一棵独立的虚拟目录树，例如 `投资/虚拟币/BTC/技术分析`。目录层级和名称完全由用户创建；路径会写入 Markdown 来源信息和 AnythingLLM 文档描述，但 RAG 检索范围仍是整个 workspace。需要严格隔离检索范围时，应创建不同的 AnythingLLM workspace。
+
 让导入服务重新读取配置：
 
 ```bash
@@ -153,7 +155,11 @@ docker compose up -d --force-recreate ingestor
 
 ### 通过 Web 页面（推荐）
 
-打开 `http://NAS_IP:8090/ui`，先选择已有知识库或输入任意名称创建新知识库，再在文本框中每行粘贴一个 YouTube 地址，单次最多 50 条。页面会自动合并同批重复链接，并持续显示字幕读取、Whisper、DeepSeek 总结、目标知识库和 AnythingLLM 入库进度。
+打开 `http://NAS_IP:8090/ui`，先选择已有知识库或输入任意名称创建新知识库，再选择根目录或创建任意多级目录，然后在文本框中每行粘贴一个 YouTube 地址，单次最多 50 条。页面会自动合并同批重复链接，并持续显示字幕读取、Whisper、DeepSeek 总结、目标知识库、目录和 AnythingLLM 入库进度。
+
+页面支持删除 AutoStuKnow 导入的单条知识，也支持递归删除整个目录。单条删除前会展示知识位置并二次确认；目录删除前会统计子目录、处理记录和已入库文档数量，并要求输入完整目录路径。删除已入库知识时，系统会先从 AnythingLLM workspace 删除向量，再永久删除 AnythingLLM 源文档，最后清理 AutoStuKnow 本地处理记录。任一远端步骤失败时会保留本地记录以便重试。正在处理的任务不能删除，目录内存在运行中任务时也不会执行递归删除。
+
+目录只是 AutoStuKnow 对自己导入内容的组织层，不会删除同一 AnythingLLM workspace 中手工上传或由其他工具导入的文档。空目录保存在 `${DATA_ROOT}/ingestor/catalog.json`，已有未分类任务会继续显示在根目录。
 
 Web 用户名默认为 `admin`，密码由 `scripts/init-nas.sh` 随机生成。只在自己的 NAS 终端查看：
 
@@ -200,7 +206,7 @@ sudo sed -n 's/^WEBHOOK_API_KEY=//p' /volume2/docker/autoStuKnow/.env
 curl -X POST 'http://NAS_IP:8090/jobs' \
   -H 'Content-Type: application/json' \
   -H 'X-API-Key: 你的INGESTOR_API_KEY' \
-  -d '{"url":"https://youtu.be/VIDEO_ID","language":"auto"}'
+  -d '{"url":"https://youtu.be/VIDEO_ID","language":"auto","workspace_slug":"目标slug","category_path":"投资/虚拟币/BTC"}'
 ```
 
 查看状态：

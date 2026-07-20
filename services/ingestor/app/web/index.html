@@ -91,6 +91,9 @@
     .primary:disabled { cursor: wait; opacity: .6; }
     .secondary { color: var(--brand); background: var(--brand-soft); }
     .ghost { color: var(--muted); background: transparent; border: 1px solid var(--line); }
+    .danger { min-height: 44px; padding: 0 18px; border: 0; border-radius: 12px; color: #fff; background: var(--danger); font-weight: 750; }
+    .danger:disabled { cursor: not-allowed; opacity: .45; }
+    .danger-ghost { min-height: 34px; padding: 0 11px; border: 1px solid #efc9c6; border-radius: 10px; color: var(--danger); background: var(--danger-soft); font-size: 12px; font-weight: 750; }
     .wide { width: 100%; margin-top: 22px; }
     .form-actions { display: flex; gap: 10px; margin-top: 22px; }
     .form-actions .primary { flex: 1; }
@@ -125,6 +128,10 @@
     .workspace-create { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; margin-top: 10px; }
     .workspace-message { min-height: 20px; margin: 7px 0 0; color: var(--muted); font-size: 13px; }
     .workspace-message.error { color: var(--danger); }
+    .directory-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; }
+    .directory-create { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; margin-top: 10px; }
+    .directory-message { min-height: 20px; margin: 7px 0 0; color: var(--muted); font-size: 13px; }
+    .directory-message.error { color: var(--danger); }
     .check { display: flex; align-items: center; gap: 9px; min-height: 46px; color: var(--muted); font-size: 14px; }
     .check input { width: 17px; height: 17px; accent-color: var(--brand); }
     .actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 18px; }
@@ -139,6 +146,7 @@
     .jobs { display: grid; gap: 12px; }
     .job { padding: 18px 20px; }
     .job-top { display: flex; justify-content: space-between; gap: 18px; align-items: start; }
+    .job-state { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
     .job-title { min-width: 0; }
     .job-title strong { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .job-url { margin-top: 5px; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -152,10 +160,16 @@
     .empty { padding: 36px 22px; text-align: center; color: var(--muted); }
     .toast { position: fixed; left: 50%; bottom: 26px; transform: translate(-50%, 20px); opacity: 0; pointer-events: none; padding: 11px 16px; border-radius: 10px; color: #fff; background: #263a31; box-shadow: var(--shadow); transition: .2s; z-index: 20; }
     .toast.show { opacity: 1; transform: translate(-50%, 0); }
+    dialog { width: min(510px, calc(100% - 32px)); padding: 0; border: 1px solid var(--line); border-radius: 18px; color: var(--ink); background: #fff; box-shadow: var(--shadow); }
+    dialog::backdrop { background: rgba(17, 31, 25, .48); backdrop-filter: blur(3px); }
+    .dialog-body { padding: 25px; }
+    .dialog-body h2 { margin-bottom: 9px; }
+    .dialog-warning { margin: 15px 0 0; padding: 12px 14px; border-radius: 11px; color: var(--danger); background: var(--danger-soft); line-height: 1.55; font-size: 14px; }
+    .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
     @media (max-width: 760px) {
       .grid { grid-template-columns: 1fr; }
       .toolbar { grid-template-columns: 1fr; }
-      .workspace-row, .workspace-create { grid-template-columns: 1fr; }
+      .workspace-row, .workspace-create, .directory-row, .directory-create { grid-template-columns: 1fr; }
       .actions { align-items: stretch; flex-direction: column; }
       .actions .primary { width: 100%; }
       .account span { display: none; }
@@ -244,6 +258,22 @@
             <p id="workspaceMessage" class="workspace-message"></p>
           </div>
           <div class="field">
+            <label for="directory">知识目录（支持任意多级）</label>
+            <div class="directory-row">
+              <select id="directory" disabled>
+                <option value="">请先选择知识库</option>
+              </select>
+              <button id="showDirectoryCreateButton" class="secondary" type="button" disabled>新建目录</button>
+              <button id="deleteDirectoryButton" class="danger-ghost" type="button" disabled>删除目录</button>
+            </div>
+            <div id="directoryCreatePanel" class="directory-create hidden">
+              <input id="directoryPath" maxlength="512" placeholder="例如：虚拟币/BTC/技术分析">
+              <button id="createDirectoryButton" class="primary" type="button">创建并选择</button>
+              <button id="cancelDirectoryCreateButton" class="ghost" type="button">取消</button>
+            </div>
+            <p id="directoryMessage" class="directory-message">可选择根目录，或创建任意层级目录。</p>
+          </div>
+          <div class="field">
             <label for="urls">YouTube 链接，每行一个</label>
             <textarea id="urls" placeholder="https://www.youtube.com/watch?v=...&#10;https://youtu.be/..." required></textarea>
           </div>
@@ -280,6 +310,21 @@
     </main>
   </section>
   <div id="toast" class="toast" role="status"></div>
+  <dialog id="confirmDialog">
+    <div class="dialog-body">
+      <h2 id="confirmTitle">确认删除</h2>
+      <p id="confirmMessage" class="subtle"></p>
+      <div id="confirmWarning" class="dialog-warning"></div>
+      <div id="confirmInputField" class="field hidden">
+        <label for="confirmInput">输入完整目录路径以确认</label>
+        <input id="confirmInput" maxlength="512" autocomplete="off">
+      </div>
+      <div class="dialog-actions">
+        <button id="cancelConfirmButton" class="ghost" type="button">取消</button>
+        <button id="acceptConfirmButton" class="danger" type="button">确认删除</button>
+      </div>
+    </div>
+  </dialog>
 
   <script>
     const loginView = document.querySelector('#loginView');
@@ -288,8 +333,11 @@
     const jobsElement = document.querySelector('#jobs');
     const jobs = new Map();
     const workspaces = new Map();
+    const directories = new Map();
     let pollTimer = null;
     let passwordChangeRequired = false;
+    let confirmationResolver = null;
+    let requiredConfirmationText = '';
 
     const stageNames = {
       queued: '等待中', fetching_metadata: '读取视频信息', fetching_subtitles: '读取字幕',
@@ -380,6 +428,31 @@
       setTimeout(() => toast.classList.remove('show'), 2200);
     }
 
+    function requestDeleteConfirmation({ title, message, warning, requiredText = '' }) {
+      const dialog = document.querySelector('#confirmDialog');
+      const inputField = document.querySelector('#confirmInputField');
+      const input = document.querySelector('#confirmInput');
+      const acceptButton = document.querySelector('#acceptConfirmButton');
+      document.querySelector('#confirmTitle').textContent = title;
+      document.querySelector('#confirmMessage').textContent = message;
+      document.querySelector('#confirmWarning').textContent = warning;
+      requiredConfirmationText = requiredText;
+      input.value = '';
+      inputField.classList.toggle('hidden', !requiredText);
+      acceptButton.disabled = Boolean(requiredText);
+      dialog.showModal();
+      if (requiredText) input.focus();
+      return new Promise(resolve => { confirmationResolver = resolve; });
+    }
+
+    function finishConfirmation(confirmed) {
+      const dialog = document.querySelector('#confirmDialog');
+      if (dialog.open) dialog.close();
+      if (confirmationResolver) confirmationResolver(confirmed);
+      confirmationResolver = null;
+      requiredConfirmationText = '';
+    }
+
     function getUrls() {
       return document.querySelector('#urls').value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
     }
@@ -414,6 +487,7 @@
         message.textContent = workspaces.size
           ? `已读取 ${workspaces.size} 个知识库，请选择本次内容的目标。`
           : 'AnythingLLM 中还没有知识库，请先创建一个。';
+        await loadDirectories();
       } catch (error) {
         select.replaceChildren(new Option('知识库读取失败', ''));
         message.classList.add('error');
@@ -423,6 +497,56 @@
 
     function workspaceName(slug) {
       return workspaces.get(slug)?.name || slug || '未指定';
+    }
+
+    function directoryStorageKey(workspaceSlug) {
+      return `autostuknow_directory_${workspaceSlug}`;
+    }
+
+    function renderDirectoryOptions(selectedPath = '') {
+      const select = document.querySelector('#directory');
+      const workspaceSlug = document.querySelector('#workspace').value;
+      select.replaceChildren(new Option('根目录（不分类）', ''));
+      [...directories.values()].forEach(directory => {
+        const indent = '\u00a0\u00a0'.repeat(Math.max(0, directory.depth - 1));
+        const label = `${indent}└ ${directory.path.split('/').at(-1)} (${directory.total_jobs})`;
+        select.add(new Option(label, directory.path));
+      });
+      const remembered = selectedPath || localStorage.getItem(directoryStorageKey(workspaceSlug)) || '';
+      select.value = directories.has(remembered) ? remembered : '';
+      select.disabled = !workspaceSlug;
+      document.querySelector('#showDirectoryCreateButton').disabled = !workspaceSlug;
+      document.querySelector('#deleteDirectoryButton').disabled = !select.value;
+    }
+
+    async function loadDirectories(selectedPath = '') {
+      const workspaceSlug = document.querySelector('#workspace').value;
+      const select = document.querySelector('#directory');
+      const message = document.querySelector('#directoryMessage');
+      directories.clear();
+      message.classList.remove('error');
+      if (!workspaceSlug) {
+        select.replaceChildren(new Option('请先选择知识库', ''));
+        select.disabled = true;
+        document.querySelector('#showDirectoryCreateButton').disabled = true;
+        document.querySelector('#deleteDirectoryButton').disabled = true;
+        message.textContent = '选择知识库后，可在其中创建任意层级目录。';
+        return;
+      }
+      select.disabled = true;
+      message.textContent = '正在读取目录…';
+      try {
+        const result = await api(`/ui/api/directories?workspace_slug=${encodeURIComponent(workspaceSlug)}`);
+        result.directories.forEach(directory => directories.set(directory.path, directory));
+        renderDirectoryOptions(selectedPath);
+        message.textContent = directories.size
+          ? `已读取 ${directories.size} 个目录；括号内为目录及其子目录的知识数量。`
+          : '当前知识库还没有分类目录，可以直接使用根目录或新建目录。';
+      } catch (error) {
+        select.replaceChildren(new Option('目录读取失败', ''));
+        message.classList.add('error');
+        message.textContent = error.message;
+      }
     }
 
     function renderJobs() {
@@ -442,12 +566,16 @@
         return `<article class="card job">
           <div class="job-top">
             <div class="job-title"><strong>${escapeHtml(job.title || '正在读取视频…')}</strong><div class="job-url">${escapeHtml(job.canonical_url || job.url)}</div></div>
-            <span class="badge ${badgeClass}">${escapeHtml(stage)}</span>
+            <div class="job-state">
+              <span class="badge ${badgeClass}">${escapeHtml(stage)}</span>
+              ${running ? '' : `<button class="danger-ghost" type="button" data-delete-job="${escapeHtml(job.id)}">删除</button>`}
+            </div>
           </div>
           <div class="progress"><span style="width:${progress}%"></span></div>
           <div class="job-meta">
             ${source ? `<span>来源：${escapeHtml(source)}</span>` : ''}
             ${job.workspace_slug ? `<span>知识库：${escapeHtml(workspaceName(job.workspace_slug))}</span>` : ''}
+            <span>目录：${escapeHtml(job.category_path || '根目录')}</span>
             ${job.sync_status ? `<span>入库：${escapeHtml(job.sync_status)}</span>` : ''}
             ${warning ? `<span>${escapeHtml(warning)}</span>` : ''}
             <span>ID：${escapeHtml(String(job.id).slice(0, 8))}</span>
@@ -460,6 +588,7 @@
     async function refreshJobs() {
       try {
         const records = await api('/ui/api/jobs');
+        jobs.clear();
         records.forEach(job => jobs.set(job.id, job));
         renderJobs();
       } catch (error) {
@@ -527,6 +656,7 @@
       event.preventDefault();
       const urls = getUrls();
       const workspaceSlug = document.querySelector('#workspace').value;
+      const categoryPath = document.querySelector('#directory').value;
       const button = document.querySelector('#submitButton');
       const message = document.querySelector('#submitMessage');
       message.textContent = '';
@@ -541,6 +671,7 @@
             urls,
             language: document.querySelector('#language').value,
             workspace_slug: workspaceSlug,
+            category_path: categoryPath,
             force: document.querySelector('#force').checked
           })
         });
@@ -549,6 +680,7 @@
         accepted.forEach(item => jobs.set(item.job_id, {
           id: item.job_id, url: item.url, canonical_url: item.url, status: item.status,
           stage: item.stage, sync_status: 'pending', workspace_slug: item.workspace_slug,
+          category_path: item.category_path,
           created_at: new Date().toISOString(), warnings: []
         }));
         renderJobs();
@@ -556,6 +688,7 @@
         updateCounter();
         showToast(`已接收 ${accepted.length} 条${rejected.length ? `，${rejected.length} 条地址无效` : ''}`);
         await refreshJobs();
+        await loadDirectories(categoryPath);
       } catch (error) {
         message.textContent = error.message;
       } finally {
@@ -564,9 +697,16 @@
     });
 
     document.querySelector('#urls').addEventListener('input', updateCounter);
-    document.querySelector('#workspace').addEventListener('change', event => {
+    document.querySelector('#workspace').addEventListener('change', async event => {
       if (event.target.value) localStorage.setItem('autostuknow_workspace_slug', event.target.value);
       else localStorage.removeItem('autostuknow_workspace_slug');
+      document.querySelector('#directoryCreatePanel').classList.add('hidden');
+      await loadDirectories();
+    });
+    document.querySelector('#directory').addEventListener('change', event => {
+      const workspaceSlug = document.querySelector('#workspace').value;
+      if (workspaceSlug) localStorage.setItem(directoryStorageKey(workspaceSlug), event.target.value);
+      document.querySelector('#deleteDirectoryButton').disabled = !event.target.value;
     });
     document.querySelector('#showWorkspaceCreateButton').addEventListener('click', () => {
       document.querySelector('#workspaceCreatePanel').classList.remove('hidden');
@@ -601,6 +741,116 @@
       } finally {
         button.disabled = false;
       }
+    });
+    document.querySelector('#showDirectoryCreateButton').addEventListener('click', () => {
+      const currentPath = document.querySelector('#directory').value;
+      const pathInput = document.querySelector('#directoryPath');
+      document.querySelector('#directoryCreatePanel').classList.remove('hidden');
+      pathInput.value = currentPath ? `${currentPath}/` : '';
+      pathInput.focus();
+      pathInput.setSelectionRange(pathInput.value.length, pathInput.value.length);
+    });
+    document.querySelector('#cancelDirectoryCreateButton').addEventListener('click', () => {
+      document.querySelector('#directoryCreatePanel').classList.add('hidden');
+      document.querySelector('#directoryPath').value = '';
+    });
+    document.querySelector('#createDirectoryButton').addEventListener('click', async () => {
+      const workspaceSlug = document.querySelector('#workspace').value;
+      const pathInput = document.querySelector('#directoryPath');
+      const button = document.querySelector('#createDirectoryButton');
+      const message = document.querySelector('#directoryMessage');
+      const path = pathInput.value.trim();
+      if (!workspaceSlug) { message.classList.add('error'); message.textContent = '请先选择知识库'; return; }
+      if (!path) { message.classList.add('error'); message.textContent = '请输入目录路径'; return; }
+      button.disabled = true;
+      message.classList.remove('error');
+      message.textContent = '正在创建目录…';
+      try {
+        const result = await api('/ui/api/directories', {
+          method: 'POST',
+          body: JSON.stringify({ workspace_slug: workspaceSlug, path })
+        });
+        await loadDirectories(result.path);
+        localStorage.setItem(directoryStorageKey(workspaceSlug), result.path);
+        document.querySelector('#directoryCreatePanel').classList.add('hidden');
+        pathInput.value = '';
+        showToast(`已创建目录：${result.path}`);
+      } catch (error) {
+        message.classList.add('error');
+        message.textContent = error.message;
+      } finally {
+        button.disabled = false;
+      }
+    });
+    document.querySelector('#deleteDirectoryButton').addEventListener('click', async () => {
+      const workspaceSlug = document.querySelector('#workspace').value;
+      const path = document.querySelector('#directory').value;
+      if (!workspaceSlug || !path) return;
+      try {
+        const preview = await api('/ui/api/directories/delete-preview', {
+          method: 'POST',
+          body: JSON.stringify({ workspace_slug: workspaceSlug, path })
+        });
+        if (preview.active_jobs) {
+          showToast(`目录中还有 ${preview.active_jobs} 个任务正在处理，暂时不能删除`);
+          return;
+        }
+        const confirmed = await requestDeleteConfirmation({
+          title: `删除目录“${path}”`,
+          message: `请输入完整目录路径“${path}”以确认。`,
+          warning: `将递归删除 ${preview.directories} 个目录、${preview.jobs} 条处理记录，其中 ${preview.synced_documents} 条已进入 AnythingLLM。向量与源文档会一并永久删除，无法恢复。`,
+          requiredText: path
+        });
+        if (!confirmed) return;
+        document.querySelector('#deleteDirectoryButton').disabled = true;
+        const result = await api('/ui/api/directories', {
+          method: 'DELETE',
+          body: JSON.stringify({ workspace_slug: workspaceSlug, path, confirm_path: path })
+        });
+        localStorage.removeItem(directoryStorageKey(workspaceSlug));
+        await loadDirectories();
+        await refreshJobs();
+        showToast(`已删除 ${result.deleted_directories} 个目录和 ${result.deleted_jobs} 条知识`);
+      } catch (error) {
+        showToast(error.message);
+        await loadDirectories(path);
+      }
+    });
+    jobsElement.addEventListener('click', async event => {
+      const button = event.target.closest('[data-delete-job]');
+      if (!button) return;
+      const jobId = button.dataset.deleteJob;
+      try {
+        const preview = await api(`/ui/api/jobs/${encodeURIComponent(jobId)}/delete-preview`);
+        if (preview.active) { showToast('这条知识仍在处理中，暂时不能删除'); return; }
+        const confirmed = await requestDeleteConfirmation({
+          title: '删除这条知识',
+          message: preview.title,
+          warning: `位置：${workspaceName(preview.workspace_slug)} / ${preview.category_path || '根目录'}。${preview.synced ? 'AnythingLLM 中的向量和源文档也会永久删除。' : '本次只需清理本地处理记录。'}此操作无法恢复。`
+        });
+        if (!confirmed) return;
+        button.disabled = true;
+        await api(`/ui/api/jobs/${encodeURIComponent(jobId)}`, {
+          method: 'DELETE',
+          body: JSON.stringify({ confirm_job_id: jobId })
+        });
+        jobs.delete(jobId);
+        renderJobs();
+        await loadDirectories(document.querySelector('#directory').value);
+        showToast('知识已删除');
+      } catch (error) {
+        button.disabled = false;
+        showToast(error.message);
+      }
+    });
+    document.querySelector('#confirmInput').addEventListener('input', event => {
+      document.querySelector('#acceptConfirmButton').disabled = event.target.value !== requiredConfirmationText;
+    });
+    document.querySelector('#cancelConfirmButton').addEventListener('click', () => finishConfirmation(false));
+    document.querySelector('#acceptConfirmButton').addEventListener('click', () => finishConfirmation(true));
+    document.querySelector('#confirmDialog').addEventListener('cancel', event => {
+      event.preventDefault();
+      finishConfirmation(false);
     });
     document.querySelector('#refreshButton').addEventListener('click', refreshJobs);
     document.querySelector('#changePasswordButton').addEventListener('click', () => {

@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 import yt_dlp
 
+from .catalog import DirectoryCatalog, path_is_within
 from .config import Settings
 from .models import (
     JobRecord,
@@ -44,6 +45,9 @@ class JobManager:
         self.settings = settings
         self.storage = JobStorage(settings.data_dir)
         self.jobs = self.storage.load_all()
+        self.catalog = DirectoryCatalog(settings.data_dir)
+        for existing_job in self.jobs.values():
+            self.catalog.register(existing_job.workspace_slug, existing_job.category_path)
         self._semaphore = asyncio.Semaphore(settings.max_concurrent_jobs)
         self._lock = asyncio.Lock()
         self._tasks: set[asyncio.Task[None]] = set()
@@ -64,7 +68,11 @@ class JobManager:
         canonical_url = canonicalize_youtube_url(request.url)
         async with self._lock:
             if not request.force:
-                existing = self._find_completed(canonical_url)
+                existing = self._find_completed(
+                    canonical_url,
+                    request.workspace_slug,
+                    request.category_path,
+                )
                 if existing:
                     return existing, True
 
@@ -74,9 +82,11 @@ class JobManager:
                 canonical_url=canonical_url,
                 language=request.language,
                 workspace_slug=request.workspace_slug,
+                category_path=request.category_path,
             )
             self.jobs[job.id] = job
             self.storage.save(job)
+            self.catalog.register(job.workspace_slug, job.category_path)
             task = asyncio.create_task(self._run(job.id), name=f"ingest-{job.id}")
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
@@ -96,6 +106,76 @@ class JobManager:
         if data_root not in path.parents or not path.is_file():
             return None
         return path
+
+    def directory_paths(self, workspace_slug: str) -> list[str]:
+        return self.catalog.list_paths(workspace_slug)
+
+    def create_directory(self, workspace_slug: str, path: str) -> str:
+        return self.catalog.create(workspace_slug, path)
+
+    def jobs_in_directory(self, workspace_slug: str, path: str) -> list[JobRecord]:
+        return [
+            job
+            for job in self.jobs.values()
+            if job.workspace_slug == workspace_slug
+            and job.category_path
+            and path_is_within(job.category_path, path)
+        ]
+
+    async def delete_job(self, job_id: str) -> JobRecord:
+        async with self._lock:
+            job = self.get(job_id)
+            if not job:
+                raise KeyError(job_id)
+            if job.status in {JobStatus.queued, JobStatus.running}:
+                raise PipelineError("任务仍在处理中，完成或失败后才能删除")
+            workspace = job.workspace_slug or self.settings.anythingllm_workspace_slug
+            if job.anythingllm_document_location:
+                if not workspace:
+                    raise PipelineError("找不到该知识对应的 AnythingLLM workspace")
+                await delete_anythingllm_documents(
+                    self.settings,
+                    workspace,
+                    [job.anythingllm_document_location],
+                )
+            self.storage.delete(job.id)
+            del self.jobs[job.id]
+            return job
+
+    async def delete_directory(self, workspace_slug: str, path: str) -> dict[str, int]:
+        async with self._lock:
+            matched_jobs = self.jobs_in_directory(workspace_slug, path)
+            active_jobs = [
+                job
+                for job in matched_jobs
+                if job.status in {JobStatus.queued, JobStatus.running}
+            ]
+            if active_jobs:
+                raise PipelineError(
+                    f"目录中仍有 {len(active_jobs)} 个任务正在处理，请等待完成后再删除"
+                )
+            locations = sorted(
+                {
+                    job.anythingllm_document_location
+                    for job in matched_jobs
+                    if job.anythingllm_document_location
+                }
+            )
+            if locations:
+                await delete_anythingllm_documents(
+                    self.settings,
+                    workspace_slug,
+                    locations,
+                )
+            for job in matched_jobs:
+                self.storage.delete(job.id)
+                del self.jobs[job.id]
+            removed_directories = self.catalog.delete(workspace_slug, path)
+            return {
+                "deleted_jobs": len(matched_jobs),
+                "deleted_documents": len(locations),
+                "deleted_directories": len(removed_directories),
+            }
 
     async def sync(self, job_id: str, workspace_slug: str | None = None) -> JobRecord:
         job = self.get(job_id)
@@ -127,6 +207,7 @@ class JobManager:
             raise
 
         job.sync_status = SyncStatus.synced
+        job.workspace_slug = workspace
         job.anythingllm_document_location = location
         job.warnings = [
             warning
@@ -142,11 +223,19 @@ class JobManager:
         self._persist(job)
         return job
 
-    def _find_completed(self, canonical_url: str) -> JobRecord | None:
+    def _find_completed(
+        self,
+        canonical_url: str,
+        workspace_slug: str | None = None,
+        category_path: str = "",
+    ) -> JobRecord | None:
         candidates = [
             job
             for job in self.jobs.values()
-            if job.canonical_url == canonical_url and job.status == JobStatus.completed
+            if job.canonical_url == canonical_url
+            and job.workspace_slug == workspace_slug
+            and job.category_path == category_path
+            and job.status == JobStatus.completed
         ]
         return max(candidates, key=lambda item: item.created_at) if candidates else None
 
@@ -218,7 +307,7 @@ class JobManager:
                 self._set_stage(job, "writing_document")
                 document_path = job_dir / "document.md"
                 document_path.write_text(
-                    render_markdown(video, transcript, summary),
+                    render_markdown(video, transcript, summary, job.category_path),
                     encoding="utf-8",
                 )
                 job.document_path = str(document_path.relative_to(self.settings.data_dir))
@@ -819,10 +908,13 @@ async def upload_to_anythingllm(
 ) -> str | None:
     endpoint = f"{settings.anythingllm_base_url.rstrip('/')}/v1/document/upload"
     headers = {"Authorization": f"Bearer {settings.anythingllm_api_key}"}
+    description = f"YouTube transcript imported by AutoStuKnow ({job.source_id or job.id})"
+    if job.category_path:
+        description = f"{description}; directory: {job.category_path}"
     metadata = {
         "title": job.title or document_path.stem,
         "docAuthor": job.uploader or "Unknown",
-        "description": f"YouTube transcript imported by AutoStuKnow ({job.source_id or job.id})",
+        "description": description,
         "docSource": job.canonical_url,
     }
     timeout = httpx.Timeout(
@@ -868,6 +960,44 @@ async def upload_to_anythingllm(
     return location
 
 
+async def delete_anythingllm_documents(
+    settings: Settings,
+    workspace_slug: str,
+    locations: list[str],
+) -> None:
+    unique_locations = sorted({location.strip() for location in locations if location.strip()})
+    if not unique_locations:
+        return
+    if not settings.anythingllm_api_key.strip():
+        raise PipelineError("尚未配置 ANYTHINGLLM_API_KEY，不能安全删除已入库知识")
+    headers = {"Authorization": f"Bearer {settings.anythingllm_api_key}"}
+    base_url = settings.anythingllm_base_url.rstrip("/")
+    timeout = httpx.Timeout(
+        float(settings.anythingllm_sync_timeout_seconds),
+        connect=30.0,
+    )
+    try:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            embedding_response = await client.post(
+                f"{base_url}/v1/workspace/{workspace_slug}/update-embeddings",
+                headers=headers,
+                json={"adds": [], "deletes": unique_locations},
+            )
+            embedding_response.raise_for_status()
+            purge_response = await client.request(
+                "DELETE",
+                f"{base_url}/v1/system/remove-documents",
+                headers=headers,
+                json={"names": unique_locations},
+            )
+            purge_response.raise_for_status()
+            payload = purge_response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise PipelineError(f"AnythingLLM 删除知识失败：{exc}") from exc
+    if not payload.get("success"):
+        raise PipelineError("AnythingLLM 未确认知识已永久删除")
+
+
 def workspace_contains_document(
     payload: dict[str, Any], workspace_slug: str, location: str
 ) -> bool:
@@ -885,7 +1015,12 @@ def workspace_contains_document(
     )
 
 
-def render_markdown(video: VideoMetadata, transcript: Transcript, summary: Summary) -> str:
+def render_markdown(
+    video: VideoMetadata,
+    transcript: Transcript,
+    summary: Summary,
+    category_path: str = "",
+) -> str:
     lines = [
         f"# {video.title}",
         "",
@@ -907,6 +1042,8 @@ def render_markdown(video: VideoMetadata, transcript: Transcript, summary: Summa
         "whisper": "本地 Whisper 语音识别",
     }
     lines.append(f"- 转录来源：{source_labels.get(transcript.source, transcript.source)}")
+    if category_path:
+        lines.append(f"- 知识目录：{category_path}")
 
     lines.extend(["", "## 摘要", "", summary.summary or "（未生成自动摘要）"])
     if summary.key_points:

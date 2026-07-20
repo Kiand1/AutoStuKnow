@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from pathlib import Path
 
 from .models import JobRecord
@@ -38,3 +39,11 @@ class JobStorage:
                 continue
             jobs[job.id] = job
         return jobs
+
+    def delete(self, job_id: str) -> None:
+        jobs_root = self.jobs_dir.resolve()
+        path = (jobs_root / job_id).resolve()
+        if path.parent != jobs_root:
+            raise ValueError("无效的任务目录")
+        if path.exists():
+            shutil.rmtree(path)

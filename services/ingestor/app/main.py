@@ -13,6 +13,9 @@ from .models import (
     JobRecord,
     JobRequest,
     JobSubmission,
+    WebDirectoryDeleteRequest,
+    WebDirectoryRequest,
+    WebJobDeleteRequest,
     WebLoginRequest,
     WebPasswordChangeRequest,
     WebWorkspaceCreateRequest,
@@ -212,6 +215,107 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ) from exc
         return {"workspace": workspace}
 
+    @application.get("/ui/api/directories", include_in_schema=False)
+    async def web_directories(
+        workspace_slug: str = Query(min_length=1, max_length=128),
+        _: str = Depends(require_web_session),
+    ) -> dict[str, list[dict[str, object]]]:
+        directories: list[dict[str, object]] = []
+        for path in manager.directory_paths(workspace_slug):
+            matched_jobs = manager.jobs_in_directory(workspace_slug, path)
+            directories.append(
+                {
+                    "path": path,
+                    "depth": path.count("/") + 1,
+                    "direct_jobs": sum(job.category_path == path for job in matched_jobs),
+                    "total_jobs": len(matched_jobs),
+                    "synced_documents": sum(
+                        bool(job.anythingllm_document_location) for job in matched_jobs
+                    ),
+                    "active_jobs": sum(
+                        job.status.value in {"queued", "running"} for job in matched_jobs
+                    ),
+                }
+            )
+        return {"directories": directories}
+
+    @application.post("/ui/api/directories", include_in_schema=False)
+    async def web_create_directory(
+        directory_request: WebDirectoryRequest,
+        _: str = Depends(require_web_session),
+    ) -> dict[str, str]:
+        try:
+            path = manager.create_directory(
+                directory_request.workspace_slug,
+                directory_request.path,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from exc
+        return {"workspace_slug": directory_request.workspace_slug, "path": path}
+
+    @application.post("/ui/api/directories/delete-preview", include_in_schema=False)
+    async def web_directory_delete_preview(
+        directory_request: WebDirectoryRequest,
+        _: str = Depends(require_web_session),
+    ) -> dict[str, object]:
+        matched_jobs = manager.jobs_in_directory(
+            directory_request.workspace_slug,
+            directory_request.path,
+        )
+        descendant_directories = [
+            path
+            for path in manager.directory_paths(directory_request.workspace_slug)
+            if path == directory_request.path
+            or path.startswith(f"{directory_request.path}/")
+        ]
+        if not descendant_directories:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="目录不存在")
+        return {
+            "workspace_slug": directory_request.workspace_slug,
+            "path": directory_request.path,
+            "directories": len(descendant_directories),
+            "jobs": len(matched_jobs),
+            "synced_documents": sum(
+                bool(job.anythingllm_document_location) for job in matched_jobs
+            ),
+            "active_jobs": sum(
+                job.status.value in {"queued", "running"} for job in matched_jobs
+            ),
+        }
+
+    @application.delete("/ui/api/directories", include_in_schema=False)
+    async def web_delete_directory(
+        directory_request: WebDirectoryDeleteRequest,
+        _: str = Depends(require_web_session),
+    ) -> dict[str, int | str]:
+        if directory_request.confirm_path != directory_request.path:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="确认目录与待删除目录不一致",
+            )
+        if directory_request.path not in manager.directory_paths(
+            directory_request.workspace_slug
+        ):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="目录不存在")
+        try:
+            result = await manager.delete_directory(
+                directory_request.workspace_slug,
+                directory_request.path,
+            )
+        except PipelineError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+        return {
+            "workspace_slug": directory_request.workspace_slug,
+            "path": directory_request.path,
+            **result,
+        }
+
     @application.post("/ui/api/logout", include_in_schema=False)
     async def web_logout() -> Response:
         response = Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -247,6 +351,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "accepted": True,
                         "input_duplicate": True,
                         "workspace_slug": workspace_slug,
+                        "category_path": request.category_path,
                         **previous.model_dump(mode="json"),
                     }
                 )
@@ -256,6 +361,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     url=canonical_url,
                     language=request.language,
                     workspace_slug=workspace_slug,
+                    category_path=request.category_path,
                     force=request.force,
                 )
             )
@@ -273,6 +379,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "accepted": True,
                     "input_duplicate": False,
                     "workspace_slug": workspace_slug,
+                    "category_path": request.category_path,
                     **submission.model_dump(mode="json"),
                 }
             )
@@ -287,6 +394,52 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return manager.list_jobs(100)
         requested_ids = {value.strip() for value in ids.split(",") if value.strip()}
         return [job for job_id in requested_ids if (job := manager.get(job_id)) is not None]
+
+    @application.get("/ui/api/jobs/{job_id}/delete-preview", include_in_schema=False)
+    async def web_job_delete_preview(
+        job_id: str,
+        _: str = Depends(require_web_session),
+    ) -> dict[str, object]:
+        job = manager.get(job_id)
+        if not job:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识不存在")
+        return {
+            "job_id": job.id,
+            "title": job.title or job.canonical_url,
+            "workspace_slug": job.workspace_slug,
+            "category_path": job.category_path,
+            "synced": bool(job.anythingllm_document_location),
+            "active": job.status.value in {"queued", "running"},
+        }
+
+    @application.delete("/ui/api/jobs/{job_id}", include_in_schema=False)
+    async def web_delete_job(
+        job_id: str,
+        delete_request: WebJobDeleteRequest,
+        _: str = Depends(require_web_session),
+    ) -> dict[str, str | bool]:
+        if not hmac.compare_digest(delete_request.confirm_job_id, job_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="删除确认信息不匹配",
+            )
+        try:
+            deleted = await manager.delete_job(job_id)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="知识不存在",
+            ) from exc
+        except PipelineError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+        return {
+            "job_id": deleted.id,
+            "deleted": True,
+            "anythingllm_deleted": bool(deleted.anythingllm_document_location),
+        }
 
     @application.get("/healthz")
     async def health() -> dict[str, str]:

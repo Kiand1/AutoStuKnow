@@ -4,6 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from .catalog import normalize_directory_path
+
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
@@ -27,14 +29,26 @@ class JobRequest(BaseModel):
     url: str = Field(min_length=10, max_length=2_048)
     language: str = Field(default="auto", max_length=32)
     workspace_slug: str | None = Field(default=None, max_length=128)
+    category_path: str = Field(default="", max_length=512)
     force: bool = False
+
+    @field_validator("category_path")
+    @classmethod
+    def normalize_category_path(cls, value: str) -> str:
+        return normalize_directory_path(value)
 
 
 class BatchJobRequest(BaseModel):
     urls: list[str] = Field(min_length=1, max_length=50)
     language: str = Field(default="auto", max_length=32)
     workspace_slug: str | None = Field(default=None, max_length=128)
+    category_path: str = Field(default="", max_length=512)
     force: bool = False
+
+    @field_validator("category_path")
+    @classmethod
+    def normalize_category_path(cls, value: str) -> str:
+        return normalize_directory_path(value)
 
 
 class WebLoginRequest(BaseModel):
@@ -59,12 +73,47 @@ class WebWorkspaceCreateRequest(BaseModel):
         return normalized
 
 
+class WebDirectoryRequest(BaseModel):
+    workspace_slug: str = Field(min_length=1, max_length=128)
+    path: str = Field(min_length=1, max_length=512)
+
+    @field_validator("workspace_slug")
+    @classmethod
+    def normalize_workspace_slug(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("知识库不能为空")
+        return normalized
+
+    @field_validator("path")
+    @classmethod
+    def normalize_path(cls, value: str) -> str:
+        normalized = normalize_directory_path(value)
+        if not normalized:
+            raise ValueError("目录路径不能为空")
+        return normalized
+
+
+class WebDirectoryDeleteRequest(WebDirectoryRequest):
+    confirm_path: str = Field(min_length=1, max_length=512)
+
+    @field_validator("confirm_path")
+    @classmethod
+    def normalize_confirm_path(cls, value: str) -> str:
+        return normalize_directory_path(value)
+
+
+class WebJobDeleteRequest(BaseModel):
+    confirm_job_id: str = Field(min_length=1, max_length=128)
+
+
 class JobRecord(BaseModel):
     id: str
     url: str
     canonical_url: str
     language: str = "auto"
     workspace_slug: str | None = None
+    category_path: str = ""
     status: JobStatus = JobStatus.queued
     stage: str = "queued"
     created_at: datetime = Field(default_factory=utc_now)
