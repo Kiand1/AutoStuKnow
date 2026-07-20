@@ -163,6 +163,10 @@ docker compose up -d --force-recreate ingestor
 
 每条已完成或失败的处理记录提供“移动”入口，可移动到同一知识库的其他目录，也可移动到另一个 AnythingLLM workspace。目录内移动只更新 AutoStuKnow 的目录归属和本地 Markdown；跨 workspace 移动会先把文档加入目标 workspace 并确认嵌入成功，再从原 workspace 移除。原 workspace 移除失败时会自动撤销目标端的添加，任务记录仍保留在原位置。正在处理的任务不能移动，目标多级目录需要先在页面创建。
 
+页面中的“知识库预览”会按当前 workspace 展示根目录、任意层级子目录、每层直接包含的知识数量、子树总数、文件大小和处理状态。点击知识可查看完整 Markdown 内容或下载单个文件；也可以下载当前目录及全部子目录，或把整个知识库导出为 ZIP。压缩包保留目录结构和空目录，并附带 `知识库信息.json`，记录来源地址、目录、文件路径、更新时间等清单信息。所有预览和下载接口都要求有效的 Web 登录会话。
+
+预览和导出范围是由 AutoStuKnow 生成并管理的本地 Markdown。若同一 AnythingLLM workspace 还包含手工上传或由其他工具导入的文件，这些外部文件不会出现在 AutoStuKnow 的压缩包中。
+
 目录只是 AutoStuKnow 对自己导入内容的组织层，不会删除同一 AnythingLLM workspace 中手工上传或由其他工具导入的文档。空目录保存在 `${DATA_ROOT}/ingestor/catalog.json`，已有未分类任务会继续显示在根目录。
 
 Web 用户名默认为 `admin`，密码由 `scripts/init-nas.sh` 随机生成。只在自己的 NAS 终端查看：

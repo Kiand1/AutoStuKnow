@@ -5,9 +5,13 @@ from pathlib import Path
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
+from starlette.background import BackgroundTask
 
+from .catalog import normalize_directory_path, path_is_within
 from .config import Settings
+from .exports import archive_download_name, build_knowledge_archive, knowledge_filename
 from .models import (
     BatchJobRequest,
     JobRecord,
@@ -68,6 +72,52 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.manager = manager
     application.state.credential_store = credential_store
     application.state.session_signer = session_signer
+
+    def available_document(job: JobRecord) -> tuple[Path | None, int]:
+        document_path = manager.document_file(job)
+        if document_path is None:
+            return None, 0
+        try:
+            return document_path, document_path.stat().st_size
+        except OSError:
+            return None, 0
+
+    def workspace_export_sources(workspace_slug: str) -> list[tuple[JobRecord, Path]]:
+        sources: list[tuple[JobRecord, Path]] = []
+        for job in manager.jobs_in_workspace(workspace_slug):
+            document_path, _ = available_document(job)
+            if document_path is not None:
+                sources.append((job, document_path))
+        return sources
+
+    async def archive_response(
+        workspace_slug: str,
+        selected_path: str = "",
+    ) -> FileResponse:
+        directories = manager.directory_paths(workspace_slug)
+        if selected_path and selected_path not in directories:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="目录不存在")
+        try:
+            archive_path = await run_in_threadpool(
+                build_knowledge_archive,
+                resolved_settings.data_dir / "cache",
+                workspace_slug,
+                workspace_export_sources(workspace_slug),
+                directories,
+                selected_path,
+            )
+        except OSError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"生成下载压缩包失败：{exc}",
+            ) from exc
+        return FileResponse(
+            archive_path,
+            media_type="application/zip",
+            filename=archive_download_name(workspace_slug, selected_path),
+            headers={"Cache-Control": "no-store"},
+            background=BackgroundTask(archive_path.unlink, missing_ok=True),
+        )
 
     async def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
         supplied = x_api_key or ""
@@ -268,6 +318,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             ) from exc
         return {"workspace_slug": workspace_slug, "deleted": True, **result}
 
+    @application.get(
+        "/ui/api/workspaces/{workspace_slug}/download",
+        include_in_schema=False,
+    )
+    async def web_download_workspace(
+        workspace_slug: str,
+        _: str = Depends(require_web_session),
+    ) -> FileResponse:
+        normalized_slug = workspace_slug.strip()
+        if not normalized_slug:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="知识库不能为空",
+            )
+        return await archive_response(normalized_slug)
+
     @application.get("/ui/api/directories", include_in_schema=False)
     async def web_directories(
         workspace_slug: str = Query(min_length=1, max_length=128),
@@ -291,6 +357,100 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 }
             )
         return {"directories": directories}
+
+    @application.get("/ui/api/library", include_in_schema=False)
+    async def web_library(
+        workspace_slug: str = Query(min_length=1, max_length=128),
+        _: str = Depends(require_web_session),
+    ) -> dict[str, object]:
+        normalized_slug = workspace_slug.strip()
+        if not normalized_slug:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="知识库不能为空",
+            )
+        jobs = sorted(
+            manager.jobs_in_workspace(normalized_slug),
+            key=lambda item: (item.category_path.casefold(), (item.title or "").casefold()),
+        )
+        documents: list[dict[str, object]] = []
+        sizes: dict[str, int] = {}
+        availability: dict[str, bool] = {}
+        for job in jobs:
+            document_path, size_bytes = available_document(job)
+            sizes[job.id] = size_bytes
+            availability[job.id] = document_path is not None
+            documents.append(
+                {
+                    "id": job.id,
+                    "title": job.title or job.canonical_url,
+                    "category_path": job.category_path,
+                    "status": job.status.value,
+                    "stage": job.stage,
+                    "source_url": job.canonical_url,
+                    "uploader": job.uploader,
+                    "duration_seconds": job.duration_seconds,
+                    "transcript_source": job.transcript_source,
+                    "sync_status": job.sync_status.value,
+                    "updated_at": job.updated_at.isoformat(),
+                    "content_available": availability[job.id],
+                    "size_bytes": size_bytes,
+                }
+            )
+
+        directories: list[dict[str, object]] = []
+        for path in manager.directory_paths(normalized_slug):
+            matched_jobs = [job for job in jobs if path_is_within(job.category_path, path)]
+            direct_jobs = [job for job in matched_jobs if job.category_path == path]
+            directories.append(
+                {
+                    "path": path,
+                    "depth": path.count("/") + 1,
+                    "direct_jobs": len(direct_jobs),
+                    "total_jobs": len(matched_jobs),
+                    "downloadable_documents": sum(
+                        availability[job.id] for job in matched_jobs
+                    ),
+                    "total_bytes": sum(sizes[job.id] for job in matched_jobs),
+                    "active_jobs": sum(
+                        job.status.value in {"queued", "running"} for job in matched_jobs
+                    ),
+                }
+            )
+        return {
+            "workspace_slug": normalized_slug,
+            "root": {
+                "direct_jobs": sum(not job.category_path for job in jobs),
+                "total_jobs": len(jobs),
+                "downloadable_documents": sum(availability.values()),
+                "total_bytes": sum(sizes.values()),
+                "active_jobs": sum(
+                    job.status.value in {"queued", "running"} for job in jobs
+                ),
+            },
+            "directories": directories,
+            "documents": documents,
+        }
+
+    @application.get("/ui/api/directories/download", include_in_schema=False)
+    async def web_download_directory(
+        workspace_slug: str = Query(min_length=1, max_length=128),
+        path: str = Query(min_length=1, max_length=512),
+        _: str = Depends(require_web_session),
+    ) -> FileResponse:
+        try:
+            normalized_path = normalize_directory_path(path)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from exc
+        if not normalized_path:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="目录不能为空",
+            )
+        return await archive_response(workspace_slug.strip(), normalized_path)
 
     @application.post("/ui/api/directories", include_in_schema=False)
     async def web_create_directory(
@@ -447,6 +607,64 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return manager.list_jobs(100)
         requested_ids = {value.strip() for value in ids.split(",") if value.strip()}
         return [job for job_id in requested_ids if (job := manager.get(job_id)) is not None]
+
+    @application.get("/ui/api/jobs/{job_id}/content", include_in_schema=False)
+    async def web_job_content(
+        job_id: str,
+        _: str = Depends(require_web_session),
+    ) -> JSONResponse:
+        job = manager.get(job_id)
+        if not job:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识不存在")
+        document_path, size_bytes = available_document(job)
+        if document_path is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="这条知识还没有可预览的 Markdown 文档",
+            )
+        try:
+            content = await run_in_threadpool(document_path.read_text, encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"读取知识内容失败：{exc}",
+            ) from exc
+        return JSONResponse(
+            {
+                "id": job.id,
+                "title": job.title or job.canonical_url,
+                "workspace_slug": manager.effective_workspace_slug(job),
+                "category_path": job.category_path,
+                "source_url": job.canonical_url,
+                "updated_at": job.updated_at.isoformat(),
+                "size_bytes": size_bytes,
+                "line_count": len(content.splitlines()),
+                "character_count": len(content),
+                "content": content,
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @application.get("/ui/api/jobs/{job_id}/download", include_in_schema=False)
+    async def web_download_job(
+        job_id: str,
+        _: str = Depends(require_web_session),
+    ) -> FileResponse:
+        job = manager.get(job_id)
+        if not job:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="知识不存在")
+        document_path, _ = available_document(job)
+        if document_path is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="这条知识还没有可下载的 Markdown 文档",
+            )
+        return FileResponse(
+            document_path,
+            media_type="text/markdown; charset=utf-8",
+            filename=knowledge_filename(job),
+            headers={"Cache-Control": "no-store"},
+        )
 
     @application.get("/ui/api/jobs/{job_id}/delete-preview", include_in_schema=False)
     async def web_job_delete_preview(

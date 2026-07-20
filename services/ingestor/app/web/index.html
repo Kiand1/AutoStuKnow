@@ -142,6 +142,40 @@
     .flow-num { width: 27px; height: 27px; display: grid; place-items: center; border-radius: 50%; background: var(--brand-soft); color: var(--brand); font-size: 12px; font-weight: 800; }
     .flow-row strong { display: block; font-size: 14px; }
     .flow-row span { display: block; margin-top: 3px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+    .library-card { margin-top: 28px; overflow: hidden; }
+    .library-head { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 22px 24px; border-bottom: 1px solid var(--line); }
+    .library-head h2 { margin: 0 0 5px; font-size: 22px; }
+    .library-head p { margin: 0; }
+    .library-head-actions { display: flex; gap: 10px; flex: 0 0 auto; }
+    .library-layout { display: grid; grid-template-columns: minmax(240px, .72fr) minmax(0, 1.8fr); min-height: 390px; }
+    .library-tree-panel { padding: 18px 14px; border-right: 1px solid var(--line); background: #fbfcfb; }
+    .library-panel-label { padding: 0 10px 10px; color: var(--muted); font-size: 12px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+    .library-tree { display: grid; gap: 4px; }
+    .tree-node { width: 100%; min-height: 43px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 6px 10px 6px calc(10px + var(--depth, 0) * 17px); border: 0; border-radius: 10px; color: var(--ink); background: transparent; text-align: left; }
+    .tree-node:hover { background: var(--brand-soft); }
+    .tree-node.selected { color: var(--brand-dark); background: var(--brand-soft); font-weight: 800; }
+    .tree-branch { color: #91a39a; font-size: 12px; }
+    .tree-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tree-count { color: var(--muted); font-size: 11px; font-weight: 700; }
+    .library-documents-panel { min-width: 0; padding: 20px 22px 24px; }
+    .library-folder-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
+    .library-folder-head h3 { margin: 3px 0 0; font-size: 19px; }
+    .library-folder-head small { color: var(--muted); }
+    .library-current-stats { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
+    .library-documents { display: grid; gap: 10px; margin-top: 14px; }
+    .library-document { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 15px; border: 1px solid var(--line); border-radius: 13px; background: #fff; }
+    .library-document-main { min-width: 0; }
+    .library-document-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .library-document-meta { display: flex; flex-wrap: wrap; gap: 6px 13px; margin-top: 7px; color: var(--muted); font-size: 12px; }
+    .library-document-actions { display: flex; gap: 7px; flex: 0 0 auto; }
+    .library-empty { padding: 46px 22px; color: var(--muted); text-align: center; }
+    .content-dialog { width: min(980px, calc(100% - 32px)); }
+    .content-dialog .dialog-body { padding: 0; }
+    .content-preview-head { display: flex; align-items: start; justify-content: space-between; gap: 18px; padding: 23px 25px 18px; border-bottom: 1px solid var(--line); }
+    .content-preview-head h2 { margin: 0 0 7px; }
+    .content-preview-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); font-size: 12px; }
+    .content-preview-actions { display: flex; gap: 9px; flex: 0 0 auto; }
+    .content-preview { max-height: min(66vh, 720px); margin: 0; padding: 24px 28px 32px; overflow: auto; color: #20332a; background: #fbfcfb; font: 14px/1.75 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
     .jobs-head { display: flex; justify-content: space-between; align-items: end; gap: 16px; margin: 34px 0 14px; }
     .jobs-head h2 { margin: 0; font-size: 22px; }
     .jobs { display: grid; gap: 12px; }
@@ -169,6 +203,11 @@
     .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
     @media (max-width: 760px) {
       .grid { grid-template-columns: 1fr; }
+      .library-head, .library-folder-head, .library-document, .content-preview-head { align-items: stretch; flex-direction: column; }
+      .library-head-actions, .library-document-actions, .content-preview-actions { width: 100%; }
+      .library-head-actions button, .library-document-actions button, .content-preview-actions button { flex: 1; }
+      .library-layout { grid-template-columns: 1fr; }
+      .library-tree-panel { border-right: 0; border-bottom: 1px solid var(--line); }
       .toolbar { grid-template-columns: 1fr; }
       .workspace-row, .workspace-create, .directory-row, .directory-create { grid-template-columns: 1fr; }
       .actions { align-items: stretch; flex-direction: column; }
@@ -307,6 +346,36 @@
           </div>
         </aside>
       </div>
+      <section class="card library-card" aria-labelledby="libraryTitle">
+        <div class="library-head">
+          <div>
+            <h2 id="libraryTitle">知识库预览</h2>
+            <p id="librarySummary" class="subtle">选择知识库后，可以查看目录结构和具体内容。</p>
+          </div>
+          <div class="library-head-actions">
+            <button id="refreshLibraryButton" class="ghost" type="button" disabled>刷新</button>
+            <button id="downloadWorkspaceButton" class="secondary" type="button" disabled>下载整个知识库</button>
+          </div>
+        </div>
+        <div id="libraryEmpty" class="library-empty">请先在上方选择一个知识库。</div>
+        <div id="libraryBrowser" class="library-layout hidden">
+          <nav class="library-tree-panel" aria-label="知识库目录结构">
+            <div class="library-panel-label">目录结构</div>
+            <div id="libraryTree" class="library-tree" role="tree"></div>
+          </nav>
+          <section class="library-documents-panel" aria-live="polite">
+            <div class="library-folder-head">
+              <div>
+                <small>当前位置</small>
+                <h3 id="libraryCurrentPath">根目录</h3>
+                <p id="libraryCurrentStats" class="library-current-stats"></p>
+              </div>
+              <button id="downloadDirectoryButton" class="secondary" type="button">下载当前目录</button>
+            </div>
+            <div id="libraryDocuments" class="library-documents"></div>
+          </section>
+        </div>
+      </section>
       <div class="jobs-head"><h2>处理记录</h2><button id="refreshButton" class="secondary" type="button">刷新</button></div>
       <div id="jobs" class="jobs"><div class="card empty">还没有任务</div></div>
     </main>
@@ -329,6 +398,21 @@
         <button id="cancelMoveButton" class="ghost" type="button">取消</button>
         <button id="acceptMoveButton" class="primary" type="button">确认移动</button>
       </div>
+    </div>
+  </dialog>
+  <dialog id="contentDialog" class="content-dialog">
+    <div class="dialog-body">
+      <div class="content-preview-head">
+        <div>
+          <h2 id="contentTitle">知识内容</h2>
+          <div id="contentMeta" class="content-preview-meta"></div>
+        </div>
+        <div class="content-preview-actions">
+          <button id="downloadContentButton" class="secondary" type="button" disabled>下载 Markdown</button>
+          <button id="closeContentButton" class="ghost" type="button">关闭</button>
+        </div>
+      </div>
+      <pre id="contentPreview" class="content-preview">正在读取内容…</pre>
     </div>
   </dialog>
   <dialog id="confirmDialog">
@@ -356,7 +440,11 @@
     const workspaces = new Map();
     const directories = new Map();
     let pollTimer = null;
+    let pollTick = 0;
     let passwordChangeRequired = false;
+    let libraryData = null;
+    let selectedLibraryPath = '';
+    let selectedContentJobId = '';
     let movingJobId = '';
     let movingSourceWorkspace = '';
     let movingSourceDirectory = '';
@@ -384,6 +472,27 @@
       })[char]);
     }
 
+    function formatBytes(value) {
+      const bytes = Number(value) || 0;
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    }
+
+    function formatDate(value) {
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? '未知时间' : date.toLocaleString('zh-CN');
+    }
+
+    function triggerDownload(path) {
+      const link = document.createElement('a');
+      link.href = path;
+      link.style.display = 'none';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    }
+
     async function api(path, options = {}) {
       const response = await fetch(path, {
         credentials: 'same-origin',
@@ -406,6 +515,9 @@
       appView.classList.add('hidden');
       passwordView.classList.add('hidden');
       loginView.classList.remove('hidden');
+      const contentDialog = document.querySelector('#contentDialog');
+      if (contentDialog.open) contentDialog.close();
+      selectedContentJobId = '';
       document.querySelector('#password').value = '';
       clearInterval(pollTimer);
       pollTimer = null;
@@ -514,16 +626,166 @@
           ? `已读取 ${workspaces.size} 个知识库，请选择本次内容的目标。`
           : 'AnythingLLM 中还没有知识库，请先创建一个。';
         await loadDirectories();
+        await loadLibrary();
       } catch (error) {
         select.replaceChildren(new Option('知识库读取失败', ''));
         document.querySelector('#deleteWorkspaceButton').disabled = true;
         message.classList.add('error');
         message.textContent = error.message;
+        clearLibrary('知识库读取失败，暂时无法预览。', true);
       }
     }
 
     function workspaceName(slug) {
       return workspaces.get(slug)?.name || slug || '未指定';
+    }
+
+    function clearLibrary(message = '请先在上方选择一个知识库。', error = false) {
+      libraryData = null;
+      selectedLibraryPath = '';
+      document.querySelector('#libraryBrowser').classList.add('hidden');
+      const empty = document.querySelector('#libraryEmpty');
+      empty.classList.remove('hidden');
+      empty.textContent = message;
+      empty.style.color = error ? 'var(--danger)' : '';
+      document.querySelector('#librarySummary').textContent = message;
+      document.querySelector('#refreshLibraryButton').disabled = !document.querySelector('#workspace').value;
+      document.querySelector('#downloadWorkspaceButton').disabled = true;
+    }
+
+    function selectedLibraryStats() {
+      if (!libraryData) return null;
+      if (!selectedLibraryPath) return libraryData.root;
+      return libraryData.directories.find(directory => directory.path === selectedLibraryPath) || null;
+    }
+
+    function renderLibraryTree() {
+      const tree = document.querySelector('#libraryTree');
+      const nodes = [
+        {
+          path: '',
+          depth: 0,
+          name: workspaceName(libraryData.workspace_slug),
+          direct_jobs: libraryData.root.direct_jobs,
+          total_jobs: libraryData.root.total_jobs
+        },
+        ...libraryData.directories.map(directory => ({
+          ...directory,
+          name: directory.path.split('/').at(-1)
+        }))
+      ];
+      tree.innerHTML = nodes.map(node => `<button
+        class="tree-node ${node.path === selectedLibraryPath ? 'selected' : ''}"
+        type="button"
+        role="treeitem"
+        aria-level="${node.depth + 1}"
+        aria-selected="${node.path === selectedLibraryPath}"
+        data-library-path="${escapeHtml(node.path)}"
+        style="--depth:${node.depth}">
+        <span class="tree-branch">${node.path ? '└' : '▾'}</span>
+        <span class="tree-name">${escapeHtml(node.name)}</span>
+        <span class="tree-count" title="当前层 ${node.direct_jobs} 条，共 ${node.total_jobs} 条">${node.direct_jobs}/${node.total_jobs}</span>
+      </button>`).join('');
+    }
+
+    function renderLibraryDocuments() {
+      const container = document.querySelector('#libraryDocuments');
+      const currentDocuments = libraryData.documents.filter(
+        document => (document.category_path || '') === selectedLibraryPath
+      );
+      document.querySelector('#libraryCurrentPath').textContent = selectedLibraryPath || '根目录';
+      const downloadButton = document.querySelector('#downloadDirectoryButton');
+      const stats = selectedLibraryStats();
+      document.querySelector('#libraryCurrentStats').textContent = stats
+        ? `当前层 ${stats.direct_jobs} 条 · 含子目录共 ${stats.total_jobs} 条 · ${stats.downloadable_documents} 个文件 · ${formatBytes(stats.total_bytes)}`
+        : '';
+      downloadButton.textContent = selectedLibraryPath ? '下载当前目录' : '下载整个知识库';
+      downloadButton.title = stats
+        ? `包含 ${stats.total_jobs} 条知识，其中 ${stats.downloadable_documents} 个文件可下载`
+        : '';
+      downloadButton.disabled = false;
+      if (!currentDocuments.length) {
+        container.innerHTML = '<div class="empty">这个目录目前没有直接存放的知识。</div>';
+        return;
+      }
+      container.innerHTML = currentDocuments.map(document => {
+        const available = document.content_available;
+        const state = stageNames[document.stage] || document.stage || document.status;
+        return `<article class="library-document">
+          <div class="library-document-main">
+            <strong class="library-document-title">${escapeHtml(document.title)}</strong>
+            <div class="library-document-meta">
+              <span>${escapeHtml(state)}</span>
+              <span>${available ? escapeHtml(formatBytes(document.size_bytes)) : '尚无 Markdown'}</span>
+              ${document.uploader ? `<span>${escapeHtml(document.uploader)}</span>` : ''}
+              <span>${escapeHtml(formatDate(document.updated_at))}</span>
+            </div>
+          </div>
+          <div class="library-document-actions">
+            <button class="secondary small-action" type="button" data-preview-job="${escapeHtml(document.id)}" ${available ? '' : 'disabled'}>预览</button>
+            <button class="ghost small-action" type="button" data-download-job="${escapeHtml(document.id)}" ${available ? '' : 'disabled'}>下载</button>
+          </div>
+        </article>`;
+      }).join('');
+    }
+
+    function renderLibrary() {
+      if (!libraryData) return;
+      document.querySelector('#libraryEmpty').classList.add('hidden');
+      document.querySelector('#libraryBrowser').classList.remove('hidden');
+      document.querySelector('#refreshLibraryButton').disabled = false;
+      document.querySelector('#downloadWorkspaceButton').disabled = false;
+      document.querySelector('#librarySummary').textContent = `${workspaceName(libraryData.workspace_slug)} · ${libraryData.root.total_jobs} 条知识 · ${libraryData.directories.length} 个目录 · ${libraryData.root.downloadable_documents} 个可下载文件（${formatBytes(libraryData.root.total_bytes)}）`;
+      renderLibraryTree();
+      renderLibraryDocuments();
+    }
+
+    async function loadLibrary(preferredPath = selectedLibraryPath, quiet = false) {
+      const workspaceSlug = document.querySelector('#workspace').value;
+      if (!workspaceSlug) {
+        clearLibrary();
+        return;
+      }
+      if (!quiet) {
+        document.querySelector('#librarySummary').textContent = '正在读取知识库目录和内容信息…';
+        document.querySelector('#refreshLibraryButton').disabled = true;
+        document.querySelector('#downloadWorkspaceButton').disabled = true;
+      }
+      try {
+        const result = await api(`/ui/api/library?workspace_slug=${encodeURIComponent(workspaceSlug)}`);
+        libraryData = result;
+        const paths = new Set(result.directories.map(directory => directory.path));
+        selectedLibraryPath = preferredPath && paths.has(preferredPath) ? preferredPath : '';
+        renderLibrary();
+      } catch (error) {
+        clearLibrary(error.message, true);
+      }
+    }
+
+    async function openContentPreview(jobId) {
+      const dialog = document.querySelector('#contentDialog');
+      selectedContentJobId = jobId;
+      document.querySelector('#contentTitle').textContent = '正在读取知识内容…';
+      document.querySelector('#contentMeta').textContent = '';
+      document.querySelector('#contentPreview').textContent = '正在读取内容…';
+      document.querySelector('#downloadContentButton').disabled = true;
+      if (!dialog.open) dialog.showModal();
+      try {
+        const result = await api(`/ui/api/jobs/${encodeURIComponent(jobId)}/content`);
+        if (selectedContentJobId !== jobId) return;
+        document.querySelector('#contentTitle').textContent = result.title;
+        document.querySelector('#contentMeta').innerHTML = `
+          <span>知识库：${escapeHtml(workspaceName(result.workspace_slug))}</span>
+          <span>目录：${escapeHtml(result.category_path || '根目录')}</span>
+          <span>${escapeHtml(formatBytes(result.size_bytes))}</span>
+          <span>${result.line_count} 行 / ${result.character_count} 字符</span>
+          <span>更新：${escapeHtml(formatDate(result.updated_at))}</span>`;
+        document.querySelector('#contentPreview').textContent = result.content;
+        document.querySelector('#downloadContentButton').disabled = false;
+      } catch (error) {
+        document.querySelector('#contentTitle').textContent = '无法预览知识';
+        document.querySelector('#contentPreview').textContent = error.message;
+      }
     }
 
     function updateMoveButtonState() {
@@ -623,11 +885,15 @@
         const progress = progressByStage[job.stage] ?? 10;
         const source = sourceNames[job.transcript_source] || job.transcript_source;
         const warning = job.warnings?.length ? `提醒 ${job.warnings.length} 条` : '';
+        const contentActions = job.document_path
+          ? `<button class="secondary small-action" type="button" data-preview-job="${escapeHtml(job.id)}">预览</button><button class="ghost small-action" type="button" data-download-job="${escapeHtml(job.id)}">下载</button>`
+          : '';
         return `<article class="card job">
           <div class="job-top">
             <div class="job-title"><strong>${escapeHtml(job.title || '正在读取视频…')}</strong><div class="job-url">${escapeHtml(job.canonical_url || job.url)}</div></div>
             <div class="job-state">
               <span class="badge ${badgeClass}">${escapeHtml(stage)}</span>
+              ${contentActions}
               ${running ? '' : `<button class="secondary small-action" type="button" data-move-job="${escapeHtml(job.id)}">移动</button><button class="danger-ghost" type="button" data-delete-job="${escapeHtml(job.id)}">删除</button>`}
             </div>
           </div>
@@ -658,7 +924,14 @@
 
     function startPolling() {
       clearInterval(pollTimer);
-      pollTimer = setInterval(refreshJobs, 3000);
+      pollTick = 0;
+      pollTimer = setInterval(() => {
+        refreshJobs();
+        pollTick += 1;
+        if (pollTick % 3 === 0 && document.querySelector('#workspace').value) {
+          loadLibrary(selectedLibraryPath, true);
+        }
+      }, 3000);
     }
 
     document.querySelector('#loginForm').addEventListener('submit', async event => {
@@ -749,6 +1022,7 @@
         showToast(`已接收 ${accepted.length} 条${rejected.length ? `，${rejected.length} 条地址无效` : ''}`);
         await refreshJobs();
         await loadDirectories(categoryPath);
+        await loadLibrary(categoryPath);
       } catch (error) {
         message.textContent = error.message;
       } finally {
@@ -763,11 +1037,63 @@
       document.querySelector('#deleteWorkspaceButton').disabled = !event.target.value;
       document.querySelector('#directoryCreatePanel').classList.add('hidden');
       await loadDirectories();
+      await loadLibrary();
     });
     document.querySelector('#directory').addEventListener('change', event => {
       const workspaceSlug = document.querySelector('#workspace').value;
       if (workspaceSlug) localStorage.setItem(directoryStorageKey(workspaceSlug), event.target.value);
       document.querySelector('#deleteDirectoryButton').disabled = !event.target.value;
+    });
+    document.querySelector('#libraryTree').addEventListener('click', event => {
+      const button = event.target.closest('[data-library-path]');
+      if (!button || !libraryData) return;
+      selectedLibraryPath = button.dataset.libraryPath || '';
+      renderLibraryTree();
+      renderLibraryDocuments();
+    });
+    document.querySelector('#libraryDocuments').addEventListener('click', event => {
+      const previewButton = event.target.closest('[data-preview-job]');
+      if (previewButton && !previewButton.disabled) {
+        openContentPreview(previewButton.dataset.previewJob);
+        return;
+      }
+      const downloadButton = event.target.closest('[data-download-job]');
+      if (downloadButton && !downloadButton.disabled) {
+        triggerDownload(`/ui/api/jobs/${encodeURIComponent(downloadButton.dataset.downloadJob)}/download`);
+      }
+    });
+    document.querySelector('#refreshLibraryButton').addEventListener('click', () => {
+      loadLibrary(selectedLibraryPath);
+    });
+    document.querySelector('#downloadWorkspaceButton').addEventListener('click', () => {
+      const workspaceSlug = document.querySelector('#workspace').value;
+      if (workspaceSlug) {
+        triggerDownload(`/ui/api/workspaces/${encodeURIComponent(workspaceSlug)}/download`);
+      }
+    });
+    document.querySelector('#downloadDirectoryButton').addEventListener('click', () => {
+      const workspaceSlug = document.querySelector('#workspace').value;
+      if (!workspaceSlug) return;
+      if (!selectedLibraryPath) {
+        triggerDownload(`/ui/api/workspaces/${encodeURIComponent(workspaceSlug)}/download`);
+        return;
+      }
+      const query = new URLSearchParams({ workspace_slug: workspaceSlug, path: selectedLibraryPath });
+      triggerDownload(`/ui/api/directories/download?${query}`);
+    });
+    document.querySelector('#downloadContentButton').addEventListener('click', () => {
+      if (selectedContentJobId) {
+        triggerDownload(`/ui/api/jobs/${encodeURIComponent(selectedContentJobId)}/download`);
+      }
+    });
+    document.querySelector('#closeContentButton').addEventListener('click', () => {
+      selectedContentJobId = '';
+      document.querySelector('#contentDialog').close();
+    });
+    document.querySelector('#contentDialog').addEventListener('cancel', event => {
+      event.preventDefault();
+      selectedContentJobId = '';
+      document.querySelector('#contentDialog').close();
     });
     document.querySelector('#showWorkspaceCreateButton').addEventListener('click', () => {
       document.querySelector('#workspaceCreatePanel').classList.remove('hidden');
@@ -832,6 +1158,7 @@
           body: JSON.stringify({ workspace_slug: workspaceSlug, path })
         });
         await loadDirectories(result.path);
+        await loadLibrary(result.path);
         localStorage.setItem(directoryStorageKey(workspaceSlug), result.path);
         document.querySelector('#directoryCreatePanel').classList.add('hidden');
         pathInput.value = '';
@@ -872,10 +1199,12 @@
         localStorage.removeItem(directoryStorageKey(workspaceSlug));
         await loadDirectories();
         await refreshJobs();
+        await loadLibrary();
         showToast(`已删除 ${result.deleted_directories} 个目录和 ${result.deleted_jobs} 条知识`);
       } catch (error) {
         showToast(error.message);
         await loadDirectories(path);
+        await loadLibrary(selectedLibraryPath, true);
       }
     });
     document.querySelector('#deleteWorkspaceButton').addEventListener('click', async () => {
@@ -917,6 +1246,17 @@
         showToast(error.message);
       }
     });
+    jobsElement.addEventListener('click', event => {
+      const previewButton = event.target.closest('[data-preview-job]');
+      if (previewButton) {
+        openContentPreview(previewButton.dataset.previewJob);
+        return;
+      }
+      const downloadButton = event.target.closest('[data-download-job]');
+      if (downloadButton) {
+        triggerDownload(`/ui/api/jobs/${encodeURIComponent(downloadButton.dataset.downloadJob)}/download`);
+      }
+    });
     jobsElement.addEventListener('click', async event => {
       const button = event.target.closest('[data-delete-job]');
       if (!button) return;
@@ -938,6 +1278,7 @@
         jobs.delete(jobId);
         renderJobs();
         await loadDirectories(document.querySelector('#directory').value);
+        await loadLibrary(selectedLibraryPath);
         showToast('知识已删除');
       } catch (error) {
         button.disabled = false;
@@ -1004,6 +1345,7 @@
         document.querySelector('#moveDialog').close();
         await refreshJobs();
         await loadDirectories(document.querySelector('#directory').value);
+        await loadLibrary(selectedLibraryPath);
         showToast(`已移动到 ${workspaceName(targetWorkspace)} / ${targetDirectory || '根目录'}`);
       } catch (error) {
         message.textContent = error.message;
@@ -1019,7 +1361,10 @@
       event.preventDefault();
       finishConfirmation(false);
     });
-    document.querySelector('#refreshButton').addEventListener('click', refreshJobs);
+    document.querySelector('#refreshButton').addEventListener('click', async () => {
+      await refreshJobs();
+      await loadLibrary(selectedLibraryPath);
+    });
     document.querySelector('#changePasswordButton').addEventListener('click', () => {
       showPasswordChange(document.querySelector('#accountName').textContent, false);
     });

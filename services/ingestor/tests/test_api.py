@@ -1,4 +1,6 @@
+import io
 import json
+import zipfile
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -32,6 +34,21 @@ def test_health_does_not_require_key(tmp_path: Path) -> None:
         response = client.get("/healthz")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_library_preview_and_downloads_require_web_login(tmp_path: Path) -> None:
+    with build_client(tmp_path) as client:
+        responses = [
+            client.get("/ui/api/library?workspace_slug=research"),
+            client.get("/ui/api/jobs/missing/content"),
+            client.get("/ui/api/jobs/missing/download"),
+            client.get("/ui/api/workspaces/research/download"),
+            client.get(
+                "/ui/api/directories/download",
+                params={"workspace_slug": "research", "path": "投资"},
+            ),
+        ]
+    assert [response.status_code for response in responses] == [401, 401, 401, 401, 401]
 
 
 def test_jobs_require_api_key(tmp_path: Path) -> None:
@@ -917,3 +934,179 @@ def test_cross_workspace_move_rolls_back_target_when_source_removal_fails(
         "adds": [],
         "deletes": ["custom-documents/rollback.json"],
     }
+
+
+def test_library_tree_content_and_archive_downloads(tmp_path: Path) -> None:
+    app = create_app(
+        Settings(
+            data_dir=tmp_path,
+            ingestor_api_key=API_KEY,
+            web_ui_username="admin",
+            web_ui_password=INITIAL_WEB_PASSWORD,
+            web_ui_session_secret="test-web-session-secret-that-is-at-least-32-characters",
+            anythingllm_workspace_slug="research",
+            anythingllm_auto_sync=False,
+        )
+    )
+    manager = app.state.manager
+    root_content = "# 根目录知识\n\n这是根目录正文。\n"
+    nested_content = "# BTC 与 ETH\n\n## 摘要\n\n这是虚拟币分析正文。\n"
+    jobs = [
+        JobRecord(
+            id="root-knowledge",
+            url="https://youtu.be/kkkkkkkkkkk",
+            canonical_url="https://www.youtube.com/watch?v=kkkkkkkkkkk",
+            workspace_slug=None,
+            category_path="",
+            status=JobStatus.completed,
+            stage="completed",
+            title="根目录知识",
+            document_path="jobs/root-knowledge/document.md",
+        ),
+        JobRecord(
+            id="nested-knowledge",
+            url="https://youtu.be/lllllllllll",
+            canonical_url="https://www.youtube.com/watch?v=lllllllllll",
+            workspace_slug="research",
+            category_path="投资/虚拟币",
+            status=JobStatus.completed,
+            stage="completed",
+            title="BTC/ETH:分析",
+            uploader="研究频道",
+            duration_seconds=321,
+            transcript_source="youtube_manual",
+            sync_status=SyncStatus.synced,
+            document_path="jobs/nested-knowledge/document.md",
+        ),
+        JobRecord(
+            id="missing-document",
+            url="https://youtu.be/mmmmmmmmmmm",
+            canonical_url="https://www.youtube.com/watch?v=mmmmmmmmmmm",
+            workspace_slug="research",
+            category_path="投资/股票",
+            status=JobStatus.failed,
+            stage="failed",
+            title="尚未生成文档",
+        ),
+        JobRecord(
+            id="other-workspace",
+            url="https://youtu.be/nnnnnnnnnnn",
+            canonical_url="https://www.youtube.com/watch?v=nnnnnnnnnnn",
+            workspace_slug="development",
+            category_path="Python",
+            status=JobStatus.completed,
+            stage="completed",
+            title="不应出现在投资知识库",
+        ),
+    ]
+    for job in jobs:
+        manager.jobs[job.id] = job
+        manager.storage.save(job)
+        manager.catalog.register(manager.effective_workspace_slug(job), job.category_path)
+    (manager.storage.job_dir("root-knowledge") / "document.md").write_text(
+        root_content,
+        encoding="utf-8",
+        newline="\n",
+    )
+    (manager.storage.job_dir("nested-knowledge") / "document.md").write_text(
+        nested_content,
+        encoding="utf-8",
+        newline="\n",
+    )
+    manager.catalog.create("research", "投资/股票")
+    manager.catalog.create("research", "投资/宏观经济")
+
+    client = ready_web_client(app)
+    try:
+        library = client.get("/ui/api/library?workspace_slug=research")
+        content = client.get("/ui/api/jobs/nested-knowledge/content")
+        single_download = client.get("/ui/api/jobs/nested-knowledge/download")
+        workspace_download = client.get("/ui/api/workspaces/research/download")
+        directory_download = client.get(
+            "/ui/api/directories/download",
+            params={"workspace_slug": "research", "path": "投资/虚拟币"},
+        )
+        unavailable = client.get("/ui/api/jobs/missing-document/content")
+        missing_directory = client.get(
+            "/ui/api/directories/download",
+            params={"workspace_slug": "research", "path": "不存在"},
+        )
+        unsafe_directory = client.get(
+            "/ui/api/directories/download",
+            params={"workspace_slug": "research", "path": "../投资"},
+        )
+    finally:
+        client.__exit__(None, None, None)
+
+    assert library.status_code == 200
+    payload = library.json()
+    assert payload["workspace_slug"] == "research"
+    assert payload["root"] == {
+        "direct_jobs": 1,
+        "total_jobs": 3,
+        "downloadable_documents": 2,
+        "total_bytes": len(root_content.encode()) + len(nested_content.encode()),
+        "active_jobs": 0,
+    }
+    assert [document["id"] for document in payload["documents"]] == [
+        "root-knowledge",
+        "missing-document",
+        "nested-knowledge",
+    ]
+    nested = next(
+        document for document in payload["documents"] if document["id"] == "nested-knowledge"
+    )
+    assert nested["content_available"] is True
+    assert nested["size_bytes"] == len(nested_content.encode())
+    assert nested["uploader"] == "研究频道"
+    assert next(
+        document for document in payload["documents"] if document["id"] == "missing-document"
+    )["content_available"] is False
+    directory_details = {item["path"]: item for item in payload["directories"]}
+    assert directory_details["投资"]["total_jobs"] == 2
+    assert directory_details["投资"]["downloadable_documents"] == 1
+    assert directory_details["投资/虚拟币"]["direct_jobs"] == 1
+    assert directory_details["投资/宏观经济"]["total_jobs"] == 0
+
+    assert content.status_code == 200
+    assert content.headers["cache-control"] == "no-store"
+    assert content.json()["content"] == nested_content
+    assert content.json()["line_count"] == 5
+    assert content.json()["category_path"] == "投资/虚拟币"
+    assert single_download.status_code == 200
+    assert single_download.content == nested_content.encode()
+    assert single_download.headers["content-type"].startswith("text/markdown")
+    assert "attachment" in single_download.headers["content-disposition"]
+
+    assert workspace_download.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(workspace_download.content)) as archive:
+        workspace_names = set(archive.namelist())
+        assert "research/" in workspace_names
+        assert "research/投资/宏观经济/" in workspace_names
+        assert "research/知识库信息.json" in workspace_names
+        markdown_names = sorted(name for name in workspace_names if name.endswith(".md"))
+        assert len(markdown_names) == 2
+        assert any(name.startswith("research/投资/虚拟币/BTC_ETH_分析") for name in markdown_names)
+        manifest = json.loads(archive.read("research/知识库信息.json"))
+        assert {document["id"] for document in manifest["documents"]} == {
+            "root-knowledge",
+            "nested-knowledge",
+        }
+        assert manifest["scope"] == "root"
+
+    assert directory_download.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(directory_download.content)) as archive:
+        directory_names = set(archive.namelist())
+        directory_markdown = [name for name in directory_names if name.endswith(".md")]
+        assert len(directory_markdown) == 1
+        assert directory_markdown[0].startswith("research/投资/虚拟币/")
+        directory_manifest = json.loads(archive.read("research/知识库信息.json"))
+        assert [document["id"] for document in directory_manifest["documents"]] == [
+            "nested-knowledge"
+        ]
+        assert directory_manifest["scope"] == "投资/虚拟币"
+
+    assert unavailable.status_code == 404
+    assert missing_directory.status_code == 404
+    assert unsafe_directory.status_code == 422
+    assert not list((tmp_path / "cache").glob(".knowledge-export-*.zip"))
