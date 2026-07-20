@@ -6,7 +6,9 @@ from fastapi.testclient import TestClient
 from httpx import Response
 
 from app.config import Settings
+from app.fusion_storage import FusionStorage
 from app.main import create_app
+from app.models import LogicalKnowledgeBase
 
 API_KEY = "test-key-that-is-at-least-24-characters"
 MCP_KEY = "test-mcp-key-that-is-at-least-24-characters"
@@ -91,10 +93,14 @@ def test_web_switch_controls_authenticated_mcp_and_persists(tmp_path: Path) -> N
     assert tools.status_code == 200
     listed_tools = tools.json()["result"]["tools"]
     assert {item["name"] for item in listed_tools} == {
+        "list_logical_knowledge_bases",
         "list_workspaces",
         "list_knowledge_tree",
         "search_knowledge",
+        "search_logical_knowledge",
+        "global_search_knowledge",
         "get_knowledge",
+        "get_fusion_knowledge",
     }
     assert all(item["annotations"]["readOnlyHint"] is True for item in listed_tools)
     assert all(item["annotations"]["destructiveHint"] is False for item in listed_tools)
@@ -190,3 +196,84 @@ def test_search_knowledge_uses_anythingllm_vectors_and_directory_filter(
     assert result["results"][0]["category_path"] == "投资/虚拟币"
     request_payload = json.loads(vector_route.calls[0].request.read())
     assert request_payload["topN"] == 15
+
+
+@respx.mock
+def test_logical_search_prioritizes_fusion_and_supplements_raw_evidence(
+    tmp_path: Path,
+) -> None:
+    base_url = "http://anythingllm.test/api"
+    logical = LogicalKnowledgeBase(
+        id="logical-investment",
+        name="投资",
+        source_workspace_name="投资原始资料",
+        source_workspace_slug="investment-raw",
+        fusion_workspace_name="投资 · 融合知识",
+        fusion_workspace_slug="investment-fusion",
+    )
+    FusionStorage(tmp_path).save_logical_bases({logical.id: logical})
+    settings = build_settings(
+        tmp_path,
+        mcp_enabled=True,
+        anythingllm_base_url=base_url,
+        anythingllm_api_key="anythingllm-test-key",
+    )
+    respx.post(f"{base_url}/v1/workspace/investment-fusion/vector-search").mock(
+        return_value=Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": "fusion-result",
+                        "text": "融合后的双均线规则",
+                        "score": 0.95,
+                        "metadata": {
+                            "title": "双均线交易系统 (v2)",
+                            "docSource": "autostuknow://fusion/topic/v2",
+                        },
+                    }
+                ]
+            },
+        )
+    )
+    respx.post(f"{base_url}/v1/workspace/investment-raw/vector-search").mock(
+        return_value=Response(
+            200,
+            json={
+                "results": [
+                    {
+                        "id": "raw-result",
+                        "text": "博主在原视频中的完整解释",
+                        "score": 0.88,
+                        "metadata": {
+                            "title": "双均线原始视频",
+                            "docSource": "https://youtu.be/example",
+                        },
+                    }
+                ]
+            },
+        )
+    )
+
+    with TestClient(create_app(settings)) as client:
+        response = client.post(
+            "/mcp",
+            headers=mcp_headers(),
+            json={
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "tools/call",
+                "params": {
+                    "name": "search_logical_knowledge",
+                    "arguments": {"query": "双均线怎么止损"},
+                },
+            },
+        )
+
+    result = response.json()["result"]["structuredContent"]
+    assert result["logical_knowledge_base"] == "投资"
+    assert [item["knowledge_tier"] for item in result["results"]] == [
+        "fusion",
+        "raw_evidence",
+    ]
+    assert result["search_strategy"] == "fusion_first_then_raw_evidence"

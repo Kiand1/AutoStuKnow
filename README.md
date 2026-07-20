@@ -169,6 +169,21 @@ docker compose up -d --force-recreate ingestor
 
 目录只是 AutoStuKnow 对自己导入内容的组织层，不会删除同一 AnythingLLM workspace 中手工上传或由其他工具导入的文档。空目录保存在 `${DATA_ROOT}/ingestor/catalog.json`，已有未分类任务会继续显示在根目录。
 
+## 跨视频知识融合
+
+8090 页面中的“知识融合”会把一个业务领域组织成一个**逻辑知识库**，其底层由两个 AnythingLLM workspace 组成：
+
+- 原始 workspace：继续保存每个视频的总结、来源信息和完整字幕，是可追溯证据层。
+- `原始名称 · 融合知识` workspace：只保存经过确认的跨视频高层知识，是优先检索层。
+
+先在“知识库预览”中勾选至少 2 条原始知识，再选择“勾选的知识”“当前目录（含子目录）”或“整个原始知识库”，填写主题和可选融合目录。DeepSeek 会分层提取每个来源，再归纳核心原则、适用条件、操作规则、风险、多来源共识、冲突、观点演变和不确定性，避免一次把所有字幕塞进模型上下文。
+
+生成结果最初只保存为 AutoStuKnow 本地草稿，不会立即污染 RAG。预览确认并输入完整标题后，系统才会自动创建或复用融合 workspace 并上传。每次“生成新版”都会保留本地版本历史；新版本在 AnythingLLM 验证成功后才移除旧版向量，因此 AnythingLLM 中始终只有当前有效版本参与融合检索。删除融合主题会删除全部本地版本和当前远端融合文档，但不会删除任何原始视频知识。
+
+AnythingLLM 原生页面仍按 workspace 检索：进入原始 workspace 可查看证据，进入融合 workspace 可只使用高层知识。AutoStuKnow MCP 会自动执行“融合优先、原始证据补充”，使用者不需要记住两个 workspace slug。AnythingLLM 本身没有跨所有 workspace 的全局知识库，MCP 的 `global_search_knowledge` 提供了逻辑层的全局检索。
+
+融合模型默认最多输出 4000 tokens，可通过 `FUSION_LLM_MAX_TOKENS` 调整。原始视频 Markdown 不会被融合任务修改。
+
 Web 用户名默认为 `admin`，密码由 `scripts/init-nas.sh` 随机生成。只在自己的 NAS 终端查看：
 
 ```bash
@@ -191,6 +206,10 @@ http://NAS_IP:8090/mcp
 
 接口使用 Streamable HTTP 和 Bearer Token，并只提供读取能力：
 
+- `list_logical_knowledge_bases`：列出面向用户的逻辑知识库名称，不暴露底层路由细节。
+- `search_logical_knowledge`：推荐入口；按逻辑知识库先检索融合知识，再补充原始证据。只有一个逻辑知识库时可省略名称。
+- `global_search_knowledge`：不知道领域时检索全部逻辑知识库，每个库内部仍然融合优先。
+- `get_fusion_knowledge`：读取某一融合版本的完整 Markdown。
 - `list_workspaces`：列出 AnythingLLM 知识库。
 - `list_knowledge_tree`：查看某个知识库中由 AutoStuKnow 管理的多级目录和知识。
 - `search_knowledge`：调用 AnythingLLM 向量检索，可选目录及子目录过滤；不指定目录时也能检索手工上传到 AnythingLLM 的文档。
@@ -218,7 +237,7 @@ url = "http://192.168.5.20:8090/mcp"
 bearer_token_env_var = "AUTOSTUKNOW_MCP_TOKEN"
 ```
 
-重启 Codex 后，可让它“先调用 AutoStuKnow 的 `search_knowledge`，再根据知识库回答”。配置格式参见 [Codex MCP 文档](https://learn.chatgpt.com/docs/extend/mcp)。
+重启 Codex 后，可让它“调用 AutoStuKnow 的 `search_logical_knowledge` 回答，优先采用 fusion，并用 raw_evidence 核验”。只有一个逻辑知识库时不需要提供名称。配置格式参见 [Codex MCP 文档](https://learn.chatgpt.com/docs/extend/mcp)。
 
 ### Claude Code
 
@@ -349,7 +368,7 @@ DATA_ROOT/
 ├── anythingllm/   # 配置、数据库、文档、向量
 ├── anythingllm-hotdir/  # AnythingLLM 文档处理临时目录
 ├── anythingllm-outputs/ # AnythingLLM 文档处理输出
-├── ingestor/      # job.json、转录、最终 Markdown（KEEP_AUDIO=true 时也保留音频）
+├── ingestor/      # 原始 job、转录、Markdown，以及 fusions/ 下的融合草稿和版本历史
 ├── n8n/           # n8n SQLite 数据库与凭据
 └── whisper/       # Whisper 模型缓存
 ```
@@ -400,10 +419,10 @@ curl http://NAS_IP:8090/readyz
 - CPU 太慢或内存不足：把 `WHISPER_MODEL` 改成 `tiny`/`base`，保持 `WHISPER_COMPUTE_TYPE=int8`，并维持 `MAX_CONCURRENT_JOBS=1`。
 - 外部 LLM 无法连接：容器内的 `localhost` 指向容器自己；宿主机服务应使用 `host.docker.internal`。
 
-## V1 边界与后续路线
+## 当前边界与后续路线
 
-当前 V1 聚焦“单个 YouTube 视频 → 可检索知识笔记”的稳定闭环，已经有基于规范 URL 的基础去重。后续建议按顺序增加：
+当前已经覆盖“视频 → 原始可追溯知识 → 人工确认的跨视频融合知识 → MCP 融合优先检索”闭环。后续建议按顺序增加：
 
-1. V2：语义去重、自动主题体系、失败重试和通知。
-2. V3：跨视频知识融合、来源冲突提示、知识版本管理。
-3. V4：在数据质量稳定后再做多 Agent 协作。
+1. 语义去重、自动主题建议、失败重试和通知。
+2. 融合知识的来源级引用定位和差异对比视图。
+3. 在数据质量稳定后再做多 Agent 协作。

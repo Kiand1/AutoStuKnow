@@ -1151,8 +1151,6 @@ async def upload_to_anythingllm(
     job: JobRecord,
     workspace_slug: str,
 ) -> str | None:
-    endpoint = f"{settings.anythingllm_base_url.rstrip('/')}/v1/document/upload"
-    headers = {"Authorization": f"Bearer {settings.anythingllm_api_key}"}
     description = f"YouTube transcript imported by AutoStuKnow ({job.source_id or job.id})"
     if job.category_path:
         description = f"{description}; directory: {job.category_path}"
@@ -1162,6 +1160,25 @@ async def upload_to_anythingllm(
         "description": description,
         "docSource": job.canonical_url,
     }
+    return await upload_document_to_anythingllm(
+        settings,
+        document_path,
+        workspace_slug,
+        metadata,
+    )
+
+
+async def upload_document_to_anythingllm(
+    settings: Settings,
+    document_path: Path,
+    workspace_slug: str,
+    metadata: dict[str, object],
+) -> str:
+    """Upload and verify a Markdown document in an AnythingLLM workspace."""
+    if not settings.anythingllm_api_key.strip():
+        raise PipelineError("尚未配置 ANYTHINGLLM_API_KEY")
+    endpoint = f"{settings.anythingllm_base_url.rstrip('/')}/v1/document/upload"
+    headers = {"Authorization": f"Bearer {settings.anythingllm_api_key}"}
     timeout = httpx.Timeout(
         float(settings.anythingllm_sync_timeout_seconds), connect=30.0
     )
@@ -1188,9 +1205,8 @@ async def upload_to_anythingllm(
     if not location:
         raise PipelineError("AnythingLLM 上传成功，但响应中没有文档位置")
 
-    verify_endpoint = (
-        f"{settings.anythingllm_base_url.rstrip('/')}/v1/workspace/{workspace_slug}"
-    )
+    encoded_slug = quote(workspace_slug, safe="")
+    verify_endpoint = f"{settings.anythingllm_base_url.rstrip('/')}/v1/workspace/{encoded_slug}"
     try:
         async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
             verify_response = await client.get(verify_endpoint, headers=headers)

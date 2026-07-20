@@ -183,6 +183,9 @@
     .library-current-stats { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
     .library-documents { display: grid; gap: 10px; margin-top: 14px; }
     .library-document { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 15px; border: 1px solid var(--line); border-radius: 13px; background: #fff; }
+    .library-document.selected { border-color: #8bc8ad; background: #f3fbf7; }
+    .library-select { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; }
+    .library-select input { width: 18px; height: 18px; flex: 0 0 auto; accent-color: var(--brand); }
     .library-document-main { min-width: 0; }
     .library-document-title { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .library-document-meta { display: flex; flex-wrap: wrap; gap: 6px 13px; margin-top: 7px; color: var(--muted); font-size: 12px; }
@@ -195,6 +198,22 @@
     .content-preview-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); font-size: 12px; }
     .content-preview-actions { display: flex; gap: 9px; flex: 0 0 auto; }
     .content-preview { max-height: min(66vh, 720px); margin: 0; padding: 24px 28px 32px; overflow: auto; color: #20332a; background: #fbfcfb; font: 14px/1.75 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .fusion-card { margin-top: 28px; padding: 24px; }
+    .fusion-head { display: flex; align-items: start; justify-content: space-between; gap: 20px; }
+    .fusion-head h2 { margin-bottom: 7px; font-size: 22px; }
+    .fusion-head p { margin-bottom: 0; }
+    .fusion-form { display: grid; grid-template-columns: 1.2fr .85fr .85fr; gap: 12px; align-items: end; margin-top: 20px; padding: 18px; border: 1px solid var(--line); border-radius: 14px; background: #fbfcfb; }
+    .fusion-form .field { margin: 0; }
+    .fusion-form-wide { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+    .fusion-selection { color: var(--muted); font-size: 13px; line-height: 1.55; }
+    .fusion-list { display: grid; gap: 10px; margin-top: 18px; }
+    .fusion-item { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 15px 16px; border: 1px solid var(--line); border-radius: 13px; }
+    .fusion-item-main { min-width: 0; }
+    .fusion-item-main strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .fusion-item-meta { display: flex; flex-wrap: wrap; gap: 6px 13px; margin-top: 7px; color: var(--muted); font-size: 12px; }
+    .fusion-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; flex: 0 0 auto; }
+    .fusion-dialog { width: min(980px, calc(100% - 32px)); }
+    .fusion-version-select { width: auto; min-width: 120px; height: 36px; padding: 0 9px; }
     .jobs-head { display: flex; justify-content: space-between; align-items: end; gap: 16px; margin: 34px 0 14px; }
     .jobs-head h2 { margin: 0; font-size: 22px; }
     .jobs { display: grid; gap: 12px; }
@@ -233,6 +252,11 @@
       .workspace-row, .workspace-create, .directory-row, .directory-create { grid-template-columns: 1fr; }
       .actions { align-items: stretch; flex-direction: column; }
       .actions .primary { width: 100%; }
+      .fusion-head, .fusion-item, .fusion-form-wide { align-items: stretch; flex-direction: column; }
+      .fusion-form { grid-template-columns: 1fr; }
+      .fusion-form-wide { grid-column: auto; }
+      .fusion-actions { width: 100%; justify-content: stretch; }
+      .fusion-actions button { flex: 1; }
       .account span { display: none; }
       .login-card { padding: 28px 22px; }
     }
@@ -385,6 +409,42 @@
           </label>
         </div>
       </section>
+      <section class="card fusion-card" aria-labelledby="fusionTitle">
+        <div class="fusion-head">
+          <div>
+            <h2 id="fusionTitle">知识融合</h2>
+            <p class="subtle">原始视频知识保持不变。DeepSeek 先生成可预览草稿，确认后才发布到单独的融合知识库；MCP 会优先检索融合知识。</p>
+          </div>
+          <button id="refreshFusionsButton" class="ghost" type="button">刷新融合记录</button>
+        </div>
+        <form id="fusionForm" class="fusion-form">
+          <div class="field">
+            <label for="fusionName">融合知识标题</label>
+            <input id="fusionName" maxlength="200" placeholder="例如：双均线交易系统" required>
+          </div>
+          <div class="field">
+            <label for="fusionScope">原始资料范围</label>
+            <select id="fusionScope">
+              <option value="selected">勾选的知识</option>
+              <option value="directory">当前目录（含子目录）</option>
+              <option value="workspace">整个原始知识库</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="fusionCategory">融合目录（可选）</label>
+            <input id="fusionCategory" maxlength="512" placeholder="例如：交易系统/趋势策略">
+          </div>
+          <div class="fusion-form-wide">
+            <div id="fusionSelection" class="fusion-selection">请先选择知识库，并在下方勾选至少 2 条原始知识。</div>
+            <div class="form-actions" style="margin:0">
+              <button id="cancelFusionUpdateButton" class="ghost hidden" type="button">取消更新</button>
+              <button id="generateFusionButton" class="primary" type="submit">生成融合草稿</button>
+            </div>
+          </div>
+          <p id="fusionMessage" class="message fusion-form-wide" role="alert"></p>
+        </form>
+        <div id="fusionList" class="fusion-list"><div class="empty">当前知识库还没有融合知识。</div></div>
+      </section>
       <section class="card library-card" aria-labelledby="libraryTitle">
         <div class="library-head">
           <div>
@@ -469,6 +529,22 @@
       </div>
     </div>
   </dialog>
+  <dialog id="fusionDialog" class="fusion-dialog content-dialog">
+    <div class="dialog-body">
+      <div class="content-preview-head">
+        <div>
+          <h2 id="fusionPreviewTitle">融合知识</h2>
+          <div id="fusionPreviewMeta" class="content-preview-meta"></div>
+        </div>
+        <div class="content-preview-actions">
+          <select id="fusionVersionSelect" class="fusion-version-select" aria-label="选择融合知识版本"></select>
+          <button id="publishFusionButton" class="primary" type="button">确认并发布</button>
+          <button id="closeFusionButton" class="ghost" type="button">关闭</button>
+        </div>
+      </div>
+      <pre id="fusionPreview" class="content-preview">正在读取融合草稿…</pre>
+    </div>
+  </dialog>
 
   <script>
     const loginView = document.querySelector('#loginView');
@@ -489,6 +565,10 @@
     let movingSourceDirectory = '';
     let confirmationResolver = null;
     let requiredConfirmationText = '';
+    let selectedFusionJobIds = new Set();
+    let fusionRecords = [];
+    let editingFusionTopicId = '';
+    let activeFusionRecordId = '';
 
     const stageNames = {
       queued: '等待中', fetching_metadata: '读取视频信息', fetching_subtitles: '读取字幕',
@@ -594,6 +674,7 @@
       await loadWorkspaces();
       await loadMcpSettings();
       await refreshJobs();
+      await loadFusions();
       startPolling();
     }
 
@@ -644,7 +725,7 @@
       setTimeout(() => toast.classList.remove('show'), 2200);
     }
 
-    function requestDeleteConfirmation({ title, message, warning, requiredText = '', inputLabel = '输入确认信息' }) {
+    function requestDeleteConfirmation({ title, message, warning, requiredText = '', inputLabel = '输入确认信息', acceptLabel = '确认删除', dangerous = true }) {
       const dialog = document.querySelector('#confirmDialog');
       const inputField = document.querySelector('#confirmInputField');
       const input = document.querySelector('#confirmInput');
@@ -654,6 +735,9 @@
       document.querySelector('#confirmWarning').textContent = warning;
       document.querySelector('#confirmInputLabel').textContent = inputLabel;
       requiredConfirmationText = requiredText;
+      acceptButton.textContent = acceptLabel;
+      acceptButton.classList.toggle('danger', dangerous);
+      acceptButton.classList.toggle('primary', !dangerous);
       input.value = '';
       inputField.classList.toggle('hidden', !requiredText);
       acceptButton.disabled = Boolean(requiredText);
@@ -683,10 +767,17 @@
       const select = document.querySelector('#workspace');
       select.replaceChildren(new Option('请选择目标知识库', ''));
       [...workspaces.values()].forEach(workspace => {
-        select.add(new Option(workspace.name, workspace.slug));
+        const label = workspace.logical_role === 'fusion'
+          ? `${workspace.name}（系统融合库，只读）`
+          : workspace.name;
+        const option = new Option(label, workspace.slug);
+        option.disabled = workspace.logical_role === 'fusion';
+        select.add(option);
       });
       const remembered = selectedSlug || localStorage.getItem('autostuknow_workspace_slug') || '';
-      select.value = workspaces.has(remembered) ? remembered : '';
+      select.value = workspaces.has(remembered) && workspaces.get(remembered)?.logical_role !== 'fusion'
+        ? remembered
+        : '';
       select.disabled = false;
       document.querySelector('#deleteWorkspaceButton').disabled = !select.value;
     }
@@ -707,12 +798,14 @@
           : 'AnythingLLM 中还没有知识库，请先创建一个。';
         await loadDirectories();
         await loadLibrary();
+        await loadFusions();
       } catch (error) {
         select.replaceChildren(new Option('知识库读取失败', ''));
         document.querySelector('#deleteWorkspaceButton').disabled = true;
         message.classList.add('error');
         message.textContent = error.message;
         clearLibrary('知识库读取失败，暂时无法预览。', true);
+        renderFusionList();
       }
     }
 
@@ -723,6 +816,7 @@
     function clearLibrary(message = '请先在上方选择一个知识库。', error = false) {
       libraryData = null;
       selectedLibraryPath = '';
+      selectedFusionJobIds.clear();
       document.querySelector('#libraryBrowser').classList.add('hidden');
       const empty = document.querySelector('#libraryEmpty');
       empty.classList.remove('hidden');
@@ -731,6 +825,7 @@
       document.querySelector('#librarySummary').textContent = message;
       document.querySelector('#refreshLibraryButton').disabled = !document.querySelector('#workspace').value;
       document.querySelector('#downloadWorkspaceButton').disabled = true;
+      updateFusionSelection();
     }
 
     function selectedLibraryStats() {
@@ -791,8 +886,12 @@
       container.innerHTML = currentDocuments.map(document => {
         const available = document.content_available;
         const state = stageNames[document.stage] || document.stage || document.status;
-        return `<article class="library-document">
-          <div class="library-document-main">
+        const selectable = available && document.status === 'completed';
+        const selected = selectedFusionJobIds.has(document.id);
+        return `<article class="library-document ${selected ? 'selected' : ''}">
+          <label class="library-select">
+            <input type="checkbox" data-fusion-job="${escapeHtml(document.id)}" ${selected ? 'checked' : ''} ${selectable ? '' : 'disabled'} aria-label="选择 ${escapeHtml(document.title)} 用于知识融合">
+            <div class="library-document-main">
             <strong class="library-document-title">${escapeHtml(document.title)}</strong>
             <div class="library-document-meta">
               <span>${escapeHtml(state)}</span>
@@ -800,7 +899,8 @@
               ${document.uploader ? `<span>${escapeHtml(document.uploader)}</span>` : ''}
               <span>${escapeHtml(formatDate(document.updated_at))}</span>
             </div>
-          </div>
+            </div>
+          </label>
           <div class="library-document-actions">
             <button class="secondary small-action" type="button" data-preview-job="${escapeHtml(document.id)}" ${available ? '' : 'disabled'}>预览</button>
             <button class="ghost small-action" type="button" data-download-job="${escapeHtml(document.id)}" ${available ? '' : 'disabled'}>下载</button>
@@ -834,11 +934,161 @@
       try {
         const result = await api(`/ui/api/library?workspace_slug=${encodeURIComponent(workspaceSlug)}`);
         libraryData = result;
+        const availableIds = new Set(result.documents.map(document => document.id));
+        selectedFusionJobIds = new Set(
+          [...selectedFusionJobIds].filter(jobId => availableIds.has(jobId))
+        );
         const paths = new Set(result.directories.map(directory => directory.path));
         selectedLibraryPath = preferredPath && paths.has(preferredPath) ? preferredPath : '';
         renderLibrary();
+        updateFusionSelection();
       } catch (error) {
         clearLibrary(error.message, true);
+      }
+    }
+
+    const fusionStatusNames = {
+      queued: '等待生成', generating: '正在融合', draft: '待确认草稿', publishing: '正在发布',
+      published: '已发布', superseded: '历史版本', failed: '失败'
+    };
+
+    function fusionScopeCount() {
+      if (!libraryData) return 0;
+      const scope = document.querySelector('#fusionScope').value;
+      if (scope === 'selected') return selectedFusionJobIds.size;
+      if (scope === 'directory') return selectedLibraryPath ? (selectedLibraryStats()?.total_jobs || 0) : 0;
+      return libraryData.root.total_jobs || 0;
+    }
+
+    function updateFusionSelection() {
+      const workspaceSlug = document.querySelector('#workspace').value;
+      const workspace = workspaces.get(workspaceSlug);
+      const scope = document.querySelector('#fusionScope').value;
+      const count = fusionScopeCount();
+      const button = document.querySelector('#generateFusionButton');
+      let text = '请先选择知识库，并在下方勾选至少 2 条原始知识。';
+      let blocked = !workspaceSlug || !libraryData || count < 2;
+      if (workspace?.logical_role === 'fusion') {
+        text = '当前选择的是系统生成的融合知识库。请切换到对应的原始知识库后再生成，避免循环融合。';
+        blocked = true;
+      } else if (workspaceSlug && libraryData) {
+        if (scope === 'selected') text = `已勾选 ${count} 条原始知识；可跨目录勾选。`;
+        if (scope === 'directory') text = selectedLibraryPath
+          ? `将融合目录“${selectedLibraryPath}”及子目录中的 ${count} 条原始知识。`
+          : '请先在上方目录树选择一个非根目录。';
+        if (scope === 'workspace') text = `将融合“${workspaceName(workspaceSlug)}”中的 ${count} 条原始知识。`;
+      }
+      document.querySelector('#fusionSelection').textContent = text;
+      button.disabled = blocked;
+    }
+
+    function renderFusionList() {
+      const container = document.querySelector('#fusionList');
+      const workspaceSlug = document.querySelector('#workspace').value;
+      if (!workspaceSlug) {
+        container.innerHTML = '<div class="empty">选择原始知识库后可查看融合知识。</div>';
+        return;
+      }
+      if (!fusionRecords.length) {
+        container.innerHTML = '<div class="empty">当前原始知识库还没有融合知识。</div>';
+        return;
+      }
+      container.innerHTML = fusionRecords.map(record => {
+        const status = fusionStatusNames[record.status] || record.status;
+        const busy = ['queued', 'generating', 'publishing'].includes(record.status);
+        return `<article class="fusion-item">
+          <div class="fusion-item-main">
+            <strong>${escapeHtml(record.title)}</strong>
+            <div class="fusion-item-meta">
+              <span>${escapeHtml(status)}</span><span>v${record.version} / ${record.version_count} 个版本</span>
+              <span>${record.source_count} 条来源</span><span>目录：${escapeHtml(record.category_path || '根目录')}</span>
+              <span>${escapeHtml(record.stage)}</span><span>${escapeHtml(formatDate(record.updated_at))}</span>
+            </div>
+            ${record.error ? `<div class="job-error">${escapeHtml(record.error)}</div>` : ''}
+          </div>
+          <div class="fusion-actions">
+            <button class="secondary small-action" type="button" data-preview-fusion="${escapeHtml(record.id)}" ${record.content_available ? '' : 'disabled'}>预览/版本</button>
+            ${record.status === 'draft' ? `<button class="primary small-action" type="button" data-publish-fusion="${escapeHtml(record.id)}">确认发布</button>` : ''}
+            <button class="ghost small-action" type="button" data-update-fusion="${escapeHtml(record.id)}" ${busy ? 'disabled' : ''}>生成新版</button>
+            <button class="danger-ghost" type="button" data-delete-fusion="${escapeHtml(record.topic_id)}" ${busy ? 'disabled' : ''}>删除</button>
+          </div>
+        </article>`;
+      }).join('');
+    }
+
+    async function loadFusions(quiet = false) {
+      const workspaceSlug = document.querySelector('#workspace').value;
+      if (!workspaceSlug || workspaces.get(workspaceSlug)?.logical_role === 'fusion') {
+        fusionRecords = [];
+        renderFusionList();
+        updateFusionSelection();
+        return;
+      }
+      if (!quiet) document.querySelector('#fusionMessage').textContent = '正在读取融合记录…';
+      try {
+        const result = await api(`/ui/api/fusions?source_workspace_slug=${encodeURIComponent(workspaceSlug)}`);
+        fusionRecords = result.fusions;
+        renderFusionList();
+        if (!quiet) document.querySelector('#fusionMessage').textContent = '';
+      } catch (error) {
+        if (!quiet) document.querySelector('#fusionMessage').textContent = error.message;
+      }
+      updateFusionSelection();
+    }
+
+    function cancelFusionUpdate() {
+      editingFusionTopicId = '';
+      document.querySelector('#fusionName').value = '';
+      document.querySelector('#fusionCategory').value = '';
+      document.querySelector('#cancelFusionUpdateButton').classList.add('hidden');
+      document.querySelector('#generateFusionButton').textContent = '生成融合草稿';
+      document.querySelector('#fusionMessage').textContent = '';
+    }
+
+    async function fetchFusionContent(recordId) {
+      const response = await fetch(`/ui/api/fusions/${encodeURIComponent(recordId)}/content`, {
+        credentials: 'same-origin'
+      });
+      const text = await response.text();
+      if (!response.ok) {
+        try { throw new Error(JSON.parse(text).detail || '读取融合知识失败'); }
+        catch (error) { if (error instanceof SyntaxError) throw new Error(text || '读取融合知识失败'); throw error; }
+      }
+      return text;
+    }
+
+    async function showFusionVersion(recordId) {
+      activeFusionRecordId = recordId;
+      const record = fusionRecords.find(item => item.id === recordId)
+        || (await api(`/ui/api/fusions/${encodeURIComponent(recordId)}`)).fusion;
+      document.querySelector('#fusionPreviewTitle').textContent = record.title;
+      document.querySelector('#fusionPreviewMeta').innerHTML = `<span>版本 v${record.version}</span><span>${escapeHtml(fusionStatusNames[record.status] || record.status)}</span><span>${record.source_count} 条原始知识</span><span>目录：${escapeHtml(record.category_path || '根目录')}</span>`;
+      document.querySelector('#publishFusionButton').classList.toggle('hidden', record.status !== 'draft');
+      document.querySelector('#fusionPreview').textContent = '正在读取融合内容…';
+      try {
+        document.querySelector('#fusionPreview').textContent = await fetchFusionContent(recordId);
+      } catch (error) {
+        document.querySelector('#fusionPreview').textContent = error.message;
+      }
+    }
+
+    async function openFusionPreview(recordId) {
+      const record = fusionRecords.find(item => item.id === recordId);
+      if (!record) return;
+      const dialog = document.querySelector('#fusionDialog');
+      document.querySelector('#fusionPreview').textContent = '正在读取融合草稿…';
+      if (!dialog.open) dialog.showModal();
+      try {
+        const result = await api(`/ui/api/fusion-topics/${encodeURIComponent(record.topic_id)}/versions`);
+        const select = document.querySelector('#fusionVersionSelect');
+        select.replaceChildren();
+        result.versions.forEach(version => {
+          select.add(new Option(`v${version.version} · ${fusionStatusNames[version.status] || version.status}`, version.id));
+        });
+        select.value = recordId;
+        await showFusionVersion(recordId);
+      } catch (error) {
+        document.querySelector('#fusionPreview').textContent = error.message;
       }
     }
 
@@ -1011,6 +1261,9 @@
         if (pollTick % 3 === 0 && document.querySelector('#workspace').value) {
           loadLibrary(selectedLibraryPath, true);
         }
+        if (fusionRecords.some(record => ['queued', 'generating', 'publishing'].includes(record.status))) {
+          loadFusions(true);
+        }
       }, 3000);
     }
 
@@ -1116,8 +1369,11 @@
       else localStorage.removeItem('autostuknow_workspace_slug');
       document.querySelector('#deleteWorkspaceButton').disabled = !event.target.value;
       document.querySelector('#directoryCreatePanel').classList.add('hidden');
+      selectedFusionJobIds.clear();
+      cancelFusionUpdate();
       await loadDirectories();
       await loadLibrary();
+      await loadFusions();
     });
     document.querySelector('#directory').addEventListener('change', event => {
       const workspaceSlug = document.querySelector('#workspace').value;
@@ -1130,8 +1386,17 @@
       selectedLibraryPath = button.dataset.libraryPath || '';
       renderLibraryTree();
       renderLibraryDocuments();
+      updateFusionSelection();
     });
     document.querySelector('#libraryDocuments').addEventListener('click', event => {
+      const fusionCheckbox = event.target.closest('[data-fusion-job]');
+      if (fusionCheckbox) {
+        if (fusionCheckbox.checked) selectedFusionJobIds.add(fusionCheckbox.dataset.fusionJob);
+        else selectedFusionJobIds.delete(fusionCheckbox.dataset.fusionJob);
+        renderLibraryDocuments();
+        updateFusionSelection();
+        return;
+      }
       const previewButton = event.target.closest('[data-preview-job]');
       if (previewButton && !previewButton.disabled) {
         openContentPreview(previewButton.dataset.previewJob);
@@ -1174,6 +1439,135 @@
       event.preventDefault();
       selectedContentJobId = '';
       document.querySelector('#contentDialog').close();
+    });
+    document.querySelector('#fusionScope').addEventListener('change', updateFusionSelection);
+    document.querySelector('#cancelFusionUpdateButton').addEventListener('click', cancelFusionUpdate);
+    document.querySelector('#refreshFusionsButton').addEventListener('click', () => loadFusions());
+    document.querySelector('#fusionForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const workspaceSlug = document.querySelector('#workspace').value;
+      const scope = document.querySelector('#fusionScope').value;
+      const title = document.querySelector('#fusionName').value.trim();
+      const message = document.querySelector('#fusionMessage');
+      const button = document.querySelector('#generateFusionButton');
+      if (!title || !workspaceSlug || fusionScopeCount() < 2) {
+        message.textContent = '请填写标题，并确保所选范围至少包含 2 条原始知识。';
+        return;
+      }
+      button.disabled = true;
+      message.textContent = '已提交，DeepSeek 正在分层提取并融合；完成后需要你预览确认。';
+      try {
+        const result = await api('/ui/api/fusions', {
+          method: 'POST',
+          body: JSON.stringify({
+            source_workspace_slug: workspaceSlug,
+            title,
+            category_path: document.querySelector('#fusionCategory').value.trim(),
+            scope,
+            selected_job_ids: scope === 'selected' ? [...selectedFusionJobIds] : [],
+            directory_path: scope === 'directory' ? selectedLibraryPath : '',
+            include_subdirectories: true,
+            topic_id: editingFusionTopicId || null
+          })
+        });
+        cancelFusionUpdate();
+        await loadFusions(true);
+        showToast(`融合任务已创建：${result.fusion.title} v${result.fusion.version}`);
+      } catch (error) {
+        message.textContent = error.message;
+      } finally {
+        updateFusionSelection();
+      }
+    });
+
+    async function publishFusion(recordId) {
+      const record = fusionRecords.find(item => item.id === recordId)
+        || (await api(`/ui/api/fusions/${encodeURIComponent(recordId)}`)).fusion;
+      const confirmed = await requestDeleteConfirmation({
+        title: `发布融合知识“${record.title}”`,
+        message: `将发布 v${record.version} 到独立的融合知识库。`,
+        warning: '发布后 MCP 会优先检索这一版；如果这是更新版本，旧版会保留在 AutoStuKnow 本地版本历史中，但会从 AnythingLLM 检索中移除。原始视频知识不受影响。',
+        requiredText: record.title,
+        inputLabel: '输入完整标题以确认发布',
+        acceptLabel: '确认并发布',
+        dangerous: false
+      });
+      if (!confirmed) return;
+      try {
+        await api(`/ui/api/fusions/${encodeURIComponent(record.id)}/publish`, {
+          method: 'POST',
+          body: JSON.stringify({ confirm_title: record.title })
+        });
+        if (document.querySelector('#fusionDialog').open) document.querySelector('#fusionDialog').close();
+        const sourceSlug = record.source_workspace_slug;
+        await loadWorkspaces(sourceSlug);
+        showToast('融合知识已发布，MCP 将优先检索这一版');
+      } catch (error) {
+        showToast(error.message);
+        await loadFusions(true);
+      }
+    }
+
+    document.querySelector('#fusionList').addEventListener('click', async event => {
+      const preview = event.target.closest('[data-preview-fusion]');
+      if (preview) { await openFusionPreview(preview.dataset.previewFusion); return; }
+      const publish = event.target.closest('[data-publish-fusion]');
+      if (publish) { await publishFusion(publish.dataset.publishFusion); return; }
+      const update = event.target.closest('[data-update-fusion]');
+      if (update) {
+        const record = fusionRecords.find(item => item.id === update.dataset.updateFusion);
+        if (!record) return;
+        if (document.querySelector('#workspace').value !== record.source_workspace_slug) {
+          await loadWorkspaces(record.source_workspace_slug);
+        }
+        editingFusionTopicId = record.topic_id;
+        selectedFusionJobIds = new Set(record.source_job_ids);
+        document.querySelector('#fusionName').value = record.title;
+        document.querySelector('#fusionCategory').value = record.category_path || '';
+        document.querySelector('#fusionScope').value = 'selected';
+        document.querySelector('#cancelFusionUpdateButton').classList.remove('hidden');
+        document.querySelector('#generateFusionButton').textContent = `生成 v${record.version + 1} 草稿`;
+        renderLibraryDocuments();
+        updateFusionSelection();
+        document.querySelector('#fusionTitle').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
+      const remove = event.target.closest('[data-delete-fusion]');
+      if (remove) {
+        const record = fusionRecords.find(item => item.topic_id === remove.dataset.deleteFusion);
+        if (!record) return;
+        const confirmed = await requestDeleteConfirmation({
+          title: `删除融合知识“${record.title}”`,
+          message: `请输入完整标题“${record.title}”以确认。`,
+          warning: `将删除全部 ${record.version_count} 个本地版本，并从融合 AnythingLLM 知识库永久删除当前发布版本。原始视频知识不会删除。`,
+          requiredText: record.title,
+          inputLabel: '输入完整标题以确认'
+        });
+        if (!confirmed) return;
+        try {
+          await api(`/ui/api/fusion-topics/${encodeURIComponent(record.topic_id)}`, {
+            method: 'DELETE',
+            body: JSON.stringify({ confirm_title: record.title })
+          });
+          await loadFusions(true);
+          showToast('融合知识及全部版本已删除；原始知识保持不变');
+        } catch (error) { showToast(error.message); }
+      }
+    });
+    document.querySelector('#fusionVersionSelect').addEventListener('change', event => {
+      showFusionVersion(event.target.value);
+    });
+    document.querySelector('#publishFusionButton').addEventListener('click', () => {
+      if (activeFusionRecordId) publishFusion(activeFusionRecordId);
+    });
+    document.querySelector('#closeFusionButton').addEventListener('click', () => {
+      activeFusionRecordId = '';
+      document.querySelector('#fusionDialog').close();
+    });
+    document.querySelector('#fusionDialog').addEventListener('cancel', event => {
+      event.preventDefault();
+      activeFusionRecordId = '';
+      document.querySelector('#fusionDialog').close();
     });
     document.querySelector('#showWorkspaceCreateButton').addEventListener('click', () => {
       document.querySelector('#workspaceCreatePanel').classList.remove('hidden');
@@ -1380,7 +1774,9 @@
         const workspaceSelect = document.querySelector('#moveWorkspace');
         workspaceSelect.replaceChildren();
         [...workspaces.values()].forEach(workspace => {
-          workspaceSelect.add(new Option(workspace.name, workspace.slug));
+          if (workspace.logical_role !== 'fusion') {
+            workspaceSelect.add(new Option(workspace.name, workspace.slug));
+          }
         });
         if (![...workspaces.keys()].includes(preview.workspace_slug)) {
           workspaceSelect.add(new Option(preview.workspace_slug, preview.workspace_slug));
