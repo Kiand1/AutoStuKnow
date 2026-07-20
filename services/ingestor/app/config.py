@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     summary_language: str = "zh-CN"
     llm_chunk_chars: int = Field(default=12_000, ge=2_000, le=100_000)
     llm_max_tokens: int = Field(default=1_800, ge=256, le=16_384)
+    fusion_llm_max_tokens: int = Field(default=4_000, ge=512, le=32_768)
 
     anythingllm_base_url: str = "http://anythingllm:3001/api"
     anythingllm_api_key: str = ""

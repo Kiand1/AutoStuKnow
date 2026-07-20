@@ -12,14 +12,19 @@ from starlette.background import BackgroundTask
 from .catalog import normalize_directory_path, path_is_within
 from .config import Settings
 from .exports import archive_download_name, build_knowledge_archive, knowledge_filename
+from .fusion import FusionManager
 from .mcp_server import McpAccessController, McpBearerAuthMiddleware, create_mcp_server
 from .models import (
     BatchJobRequest,
+    FusionRecord,
     JobRecord,
     JobRequest,
     JobSubmission,
     WebDirectoryDeleteRequest,
     WebDirectoryRequest,
+    WebFusionDeleteRequest,
+    WebFusionGenerateRequest,
+    WebFusionPublishRequest,
     WebJobDeleteRequest,
     WebJobMoveRequest,
     WebLoginRequest,
@@ -49,8 +54,9 @@ from .web_auth import (
 def create_app(settings: Settings | None = None) -> FastAPI:
     resolved_settings = settings or Settings()
     manager = JobManager(resolved_settings)
+    fusion_manager = FusionManager(resolved_settings, manager)
     mcp_access = McpAccessController(resolved_settings.data_dir, resolved_settings.mcp_enabled)
-    mcp_server = create_mcp_server(resolved_settings, manager)
+    mcp_server = create_mcp_server(resolved_settings, manager, fusion_manager)
     credential_store = WebCredentialStore(
         resolved_settings.data_dir,
         resolved_settings.web_ui_password,
@@ -69,12 +75,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     application = FastAPI(
         title="AutoStuKnow Ingestor",
-        version="1.0.0",
-        description="YouTube → Faster Whisper → OpenAI-compatible summary → AnythingLLM",
+        version="1.1.0",
+        description=(
+            "YouTube → Whisper → DeepSeek summary/fusion → AnythingLLM logical knowledge base"
+        ),
         lifespan=lifespan,
     )
     application.state.settings = resolved_settings
     application.state.manager = manager
+    application.state.fusion_manager = fusion_manager
     application.state.credential_store = credential_store
     application.state.session_signer = session_signer
     application.state.mcp_server = mcp_server
@@ -88,6 +97,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return document_path, document_path.stat().st_size
         except OSError:
             return None, 0
+
+    def fusion_payload(record: FusionRecord) -> dict[str, object]:
+        versions = fusion_manager.versions(record.topic_id)
+        return {
+            **record.model_dump(mode="json"),
+            "source_count": len(record.source_job_ids),
+            "content_available": fusion_manager.document_file(record) is not None,
+            "version_count": len(versions),
+            "is_latest": bool(versions and versions[0].id == record.id),
+        }
 
     def workspace_export_sources(workspace_slug: str) -> list[tuple[JobRecord, Path]]:
         sources: list[tuple[JobRecord, Path]] = []
@@ -257,7 +276,151 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=str(exc),
             ) from exc
-        return {"workspaces": workspaces}
+        logical_by_slug: dict[str, dict[str, str]] = {}
+        for logical in fusion_manager.list_logical_bases():
+            logical_by_slug[logical.source_workspace_slug] = {
+                "logical_kb_id": logical.id,
+                "logical_role": "source",
+                "logical_name": logical.name,
+            }
+            if logical.fusion_workspace_slug:
+                logical_by_slug[logical.fusion_workspace_slug] = {
+                    "logical_kb_id": logical.id,
+                    "logical_role": "fusion",
+                    "logical_name": logical.name,
+                }
+        return {
+            "workspaces": [
+                {**workspace, **logical_by_slug.get(str(workspace["slug"]), {})}
+                for workspace in workspaces
+            ]
+        }
+
+    @application.get("/ui/api/logical-knowledge-bases", include_in_schema=False)
+    async def web_logical_knowledge_bases(
+        _: str = Depends(require_web_session),
+    ) -> dict[str, object]:
+        items = []
+        for logical in fusion_manager.list_logical_bases():
+            latest = fusion_manager.list_latest(logical.source_workspace_slug)
+            items.append(
+                {
+                    **logical.model_dump(mode="json"),
+                    "fusion_topic_count": len(latest),
+                    "published_topic_count": sum(
+                        item.status.value == "published" for item in latest
+                    ),
+                }
+            )
+        return {"logical_knowledge_bases": items, "count": len(items)}
+
+    @application.get("/ui/api/fusions", include_in_schema=False)
+    async def web_fusions(
+        source_workspace_slug: str | None = Query(default=None, max_length=128),
+        _: str = Depends(require_web_session),
+    ) -> dict[str, object]:
+        records = fusion_manager.list_latest(
+            source_workspace_slug.strip() if source_workspace_slug else None
+        )
+        return {"fusions": [fusion_payload(record) for record in records]}
+
+    @application.post("/ui/api/fusions", include_in_schema=False)
+    async def web_generate_fusion(
+        fusion_request: WebFusionGenerateRequest,
+        _: str = Depends(require_web_session),
+    ) -> dict[str, object]:
+        try:
+            record = await fusion_manager.generate(fusion_request)
+        except PipelineError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+        return {"fusion": fusion_payload(record)}
+
+    @application.get("/ui/api/fusions/{record_id}", include_in_schema=False)
+    async def web_fusion_detail(
+        record_id: str,
+        _: str = Depends(require_web_session),
+    ) -> dict[str, object]:
+        record = fusion_manager.get(record_id)
+        if record is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="融合知识不存在")
+        return {"fusion": fusion_payload(record)}
+
+    @application.get("/ui/api/fusions/{record_id}/content", include_in_schema=False)
+    async def web_fusion_content(
+        record_id: str,
+        _: str = Depends(require_web_session),
+    ) -> Response:
+        record = fusion_manager.get(record_id)
+        document = fusion_manager.document_file(record) if record else None
+        if record is None or document is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="融合草稿不存在或尚未生成",
+            )
+        try:
+            content = await run_in_threadpool(document.read_text, encoding="utf-8")
+        except OSError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"读取融合草稿失败：{exc}",
+            ) from exc
+        return Response(content=content, media_type="text/markdown; charset=utf-8")
+
+    @application.get("/ui/api/fusion-topics/{topic_id}/versions", include_in_schema=False)
+    async def web_fusion_versions(
+        topic_id: str,
+        _: str = Depends(require_web_session),
+    ) -> dict[str, object]:
+        versions = fusion_manager.versions(topic_id)
+        if not versions:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="融合知识不存在")
+        return {"versions": [fusion_payload(record) for record in versions]}
+
+    @application.post("/ui/api/fusions/{record_id}/publish", include_in_schema=False)
+    async def web_publish_fusion(
+        record_id: str,
+        publish_request: WebFusionPublishRequest,
+        _: str = Depends(require_web_session),
+    ) -> dict[str, object]:
+        try:
+            record = await fusion_manager.publish(record_id, publish_request.confirm_title)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="融合知识不存在",
+            ) from exc
+        except PipelineError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+        return {"fusion": fusion_payload(record)}
+
+    @application.delete("/ui/api/fusion-topics/{topic_id}", include_in_schema=False)
+    async def web_delete_fusion_topic(
+        topic_id: str,
+        delete_request: WebFusionDeleteRequest,
+        _: str = Depends(require_web_session),
+    ) -> dict[str, object]:
+        try:
+            deleted_versions = await fusion_manager.delete_topic(
+                topic_id,
+                delete_request.confirm_title,
+            )
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="融合知识不存在",
+            ) from exc
+        except PipelineError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+        return {"deleted": True, "topic_id": topic_id, "deleted_versions": deleted_versions}
 
     @application.post("/ui/api/workspaces", include_in_schema=False)
     async def web_create_workspace(

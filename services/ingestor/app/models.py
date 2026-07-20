@@ -25,6 +25,22 @@ class SyncStatus(StrEnum):
     failed = "failed"
 
 
+class FusionStatus(StrEnum):
+    queued = "queued"
+    generating = "generating"
+    draft = "draft"
+    publishing = "publishing"
+    published = "published"
+    superseded = "superseded"
+    failed = "failed"
+
+
+class FusionScope(StrEnum):
+    selected = "selected"
+    directory = "directory"
+    workspace = "workspace"
+
+
 class JobRequest(BaseModel):
     url: str = Field(min_length=10, max_length=2_048)
     language: str = Field(default="auto", max_length=32)
@@ -153,6 +169,38 @@ class WebJobMoveRequest(BaseModel):
         return normalize_directory_path(value)
 
 
+class WebFusionGenerateRequest(BaseModel):
+    source_workspace_slug: str = Field(min_length=1, max_length=128)
+    title: str = Field(min_length=1, max_length=200)
+    category_path: str = Field(default="", max_length=512)
+    scope: FusionScope = FusionScope.selected
+    selected_job_ids: list[str] = Field(default_factory=list, max_length=200)
+    directory_path: str = Field(default="", max_length=512)
+    include_subdirectories: bool = True
+    topic_id: str | None = Field(default=None, max_length=128)
+
+    @field_validator("source_workspace_slug", "title")
+    @classmethod
+    def normalize_required_text(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("该字段不能为空")
+        return normalized
+
+    @field_validator("category_path", "directory_path")
+    @classmethod
+    def normalize_fusion_path(cls, value: str) -> str:
+        return normalize_directory_path(value)
+
+
+class WebFusionPublishRequest(BaseModel):
+    confirm_title: str = Field(min_length=1, max_length=200)
+
+
+class WebFusionDeleteRequest(BaseModel):
+    confirm_title: str = Field(min_length=1, max_length=200)
+
+
 class JobRecord(BaseModel):
     id: str
     url: str
@@ -173,6 +221,68 @@ class JobRecord(BaseModel):
     transcript_source: str | None = None
     document_path: str | None = None
     sync_status: SyncStatus = SyncStatus.pending
+    anythingllm_document_location: str | None = None
+    error: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
+class LogicalKnowledgeBase(BaseModel):
+    id: str
+    name: str
+    source_workspace_name: str
+    source_workspace_slug: str
+    fusion_workspace_name: str
+    fusion_workspace_slug: str | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class FusionSourceExtract(BaseModel):
+    job_id: str = ""
+    title: str = ""
+    source_url: str = ""
+    summary: str = ""
+    principles: list[str] = Field(default_factory=list)
+    conditions: list[str] = Field(default_factory=list)
+    risk_controls: list[str] = Field(default_factory=list)
+    claims: list[str] = Field(default_factory=list)
+    conflicts: list[str] = Field(default_factory=list)
+    changes: list[str] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+
+
+class FusionContent(BaseModel):
+    executive_summary: str = ""
+    core_principles: list[str] = Field(default_factory=list)
+    applicable_conditions: list[str] = Field(default_factory=list)
+    operating_rules: list[str] = Field(default_factory=list)
+    risk_controls: list[str] = Field(default_factory=list)
+    consensus: list[str] = Field(default_factory=list)
+    conflicts: list[str] = Field(default_factory=list)
+    evolution: list[str] = Field(default_factory=list)
+    uncertainties: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+
+class FusionRecord(BaseModel):
+    id: str
+    topic_id: str
+    logical_kb_id: str
+    source_workspace_slug: str
+    fusion_workspace_slug: str | None = None
+    title: str
+    category_path: str = ""
+    scope: FusionScope
+    source_job_ids: list[str] = Field(default_factory=list)
+    version: int = 1
+    previous_version_id: str | None = None
+    status: FusionStatus = FusionStatus.queued
+    stage: str = "queued"
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    published_at: datetime | None = None
+    document_path: str | None = None
+    extract_path: str | None = None
     anythingllm_document_location: str | None = None
     error: str | None = None
     warnings: list[str] = Field(default_factory=list)

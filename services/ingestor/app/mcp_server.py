@@ -1,3 +1,4 @@
+import asyncio
 import hmac
 import json
 import os
@@ -14,7 +15,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from .catalog import normalize_directory_path, path_is_within
 from .config import Settings
-from .models import JobRecord
+from .fusion import FusionManager
+from .models import FusionRecord, JobRecord, LogicalKnowledgeBase
 from .pipeline import (
     JobManager,
     PipelineError,
@@ -166,7 +168,8 @@ def _metadata_directory(metadata: dict[str, Any]) -> str:
     if marker not in description:
         return ""
     try:
-        return normalize_directory_path(description.split(marker, 1)[1].strip())
+        value = description.split(marker, 1)[1].split(";", 1)[0].strip()
+        return normalize_directory_path(value)
     except ValueError:
         return ""
 
@@ -219,7 +222,111 @@ async def _vector_search(
     return [item for item in results if isinstance(item, dict)]
 
 
-def create_mcp_server(settings: Settings, manager: JobManager) -> FastMCP:
+async def _search_workspace(
+    settings: Settings,
+    workspace_slug: str,
+    query: str,
+    top_k: int,
+    score_threshold: float,
+    category_path: str = "",
+    include_subdirectories: bool = True,
+    max_chars_per_result: int = 6000,
+    knowledge_tier: str = "raw",
+) -> list[dict[str, object]]:
+    selected_category = normalize_directory_path(category_path)
+    requested = min(50, top_k * 5) if selected_category else top_k
+    raw_results = await _vector_search(
+        settings,
+        workspace_slug,
+        query,
+        requested,
+        score_threshold,
+    )
+    results: list[dict[str, object]] = []
+    for item in raw_results:
+        metadata = item.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        result_category = _metadata_directory(metadata)
+        if not _matches_category(result_category, selected_category, include_subdirectories):
+            continue
+        text = str(item.get("text") or "")
+        results.append(
+            {
+                "id": item.get("id"),
+                "title": metadata.get("title") or metadata.get("chunkSource"),
+                "source_url": metadata.get("docSource") or metadata.get("url"),
+                "category_path": result_category,
+                "knowledge_tier": knowledge_tier,
+                "score": item.get("score"),
+                "distance": item.get("distance"),
+                "text": text[:max_chars_per_result],
+                "truncated": len(text) > max_chars_per_result,
+            }
+        )
+        if len(results) >= top_k:
+            break
+    return results
+
+
+def _logical_summary(
+    logical: LogicalKnowledgeBase,
+    fusion_manager: FusionManager,
+) -> dict[str, object]:
+    latest = fusion_manager.list_latest(logical.source_workspace_slug)
+    return {
+        "id": logical.id,
+        "name": logical.name,
+        "source_workspace": logical.source_workspace_name,
+        "fusion_workspace": logical.fusion_workspace_name,
+        "fusion_ready": bool(logical.fusion_workspace_slug),
+        "fusion_topic_count": len(latest),
+        "published_topic_count": sum(item.status.value == "published" for item in latest),
+    }
+
+
+def _resolve_logical_base(
+    fusion_manager: FusionManager,
+    identifier: str,
+) -> LogicalKnowledgeBase:
+    choices = fusion_manager.list_logical_bases()
+    normalized = identifier.strip().casefold()
+    if normalized:
+        matched = [
+            item
+            for item in choices
+            if normalized in {item.id.casefold(), item.name.casefold()}
+        ]
+        if len(matched) == 1:
+            return matched[0]
+        raise ValueError("逻辑知识库不存在；请先调用 list_logical_knowledge_bases")
+    if len(choices) == 1:
+        return choices[0]
+    if not choices:
+        raise ValueError("尚未创建逻辑知识库，请先在 AutoStuKnow 页面生成融合知识")
+    raise ValueError("存在多个逻辑知识库，请传入 list_logical_knowledge_bases 返回的 name")
+
+
+def _fusion_summary(
+    record: FusionRecord,
+    fusion_manager: FusionManager,
+) -> dict[str, object]:
+    return {
+        "record_id": record.id,
+        "topic_id": record.topic_id,
+        "title": record.title,
+        "version": record.version,
+        "status": record.status.value,
+        "category_path": record.category_path,
+        "source_count": len(record.source_job_ids),
+        "has_document": fusion_manager.document_file(record) is not None,
+    }
+
+
+def create_mcp_server(
+    settings: Settings,
+    manager: JobManager,
+    fusion_manager: FusionManager,
+) -> FastMCP:
     read_only = ToolAnnotations(
         readOnlyHint=True,
         destructiveHint=False,
@@ -230,8 +337,9 @@ def create_mcp_server(settings: Settings, manager: JobManager) -> FastMCP:
         name="AutoStuKnow Knowledge Base",
         instructions=(
             "Read-only access to knowledge stored in AnythingLLM by AutoStuKnow. "
-            "Call list_workspaces first when the target workspace is unknown. "
-            "Use search_knowledge before answering and cite returned titles and source URLs. "
+            "Prefer search_logical_knowledge: it automatically searches curated fusion knowledge "
+            "first and supplements it with raw evidence, without requiring workspace slugs. "
+            "Use global_search_knowledge when the target logical knowledge base is unknown. "
             "Use get_knowledge only when a complete AutoStuKnow Markdown note is needed."
         ),
         stateless_http=True,
@@ -241,6 +349,15 @@ def create_mcp_server(settings: Settings, manager: JobManager) -> FastMCP:
         # Bearer authentication below remains mandatory for every transport request.
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
     )
+
+    @server.tool(annotations=read_only)
+    async def list_logical_knowledge_bases() -> dict[str, object]:
+        """List user-facing logical knowledge bases without exposing workspace routing details."""
+        items = [
+            _logical_summary(logical, fusion_manager)
+            for logical in fusion_manager.list_logical_bases()
+        ]
+        return {"logical_knowledge_bases": items, "count": len(items)}
 
     @server.tool(annotations=read_only)
     async def list_workspaces() -> dict[str, object]:
@@ -302,42 +419,16 @@ def create_mcp_server(settings: Settings, manager: JobManager) -> FastMCP:
         selected_category = normalize_directory_path(category_path)
 
         await get_anythingllm_workspace(settings, normalized_slug)
-        requested = min(50, top_k * 5) if selected_category else top_k
-        raw_results = await _vector_search(
+        results = await _search_workspace(
             settings,
             normalized_slug,
             normalized_query,
-            requested,
+            top_k,
             score_threshold,
+            selected_category,
+            include_subdirectories,
+            max_chars_per_result,
         )
-
-        results: list[dict[str, object]] = []
-        for item in raw_results:
-            metadata = item.get("metadata")
-            metadata = metadata if isinstance(metadata, dict) else {}
-            result_category = _metadata_directory(metadata)
-            if not _matches_category(
-                result_category,
-                selected_category,
-                include_subdirectories,
-            ):
-                continue
-            text = str(item.get("text") or "")
-            truncated = len(text) > max_chars_per_result
-            results.append(
-                {
-                    "id": item.get("id"),
-                    "title": metadata.get("title") or metadata.get("chunkSource"),
-                    "source_url": metadata.get("docSource") or metadata.get("url"),
-                    "category_path": result_category,
-                    "score": item.get("score"),
-                    "distance": item.get("distance"),
-                    "text": text[:max_chars_per_result],
-                    "truncated": truncated,
-                }
-            )
-            if len(results) >= top_k:
-                break
 
         return {
             "workspace_slug": normalized_slug,
@@ -345,6 +436,142 @@ def create_mcp_server(settings: Settings, manager: JobManager) -> FastMCP:
             "category_path": selected_category,
             "results": results,
             "count": len(results),
+        }
+
+    @server.tool(annotations=read_only)
+    async def search_logical_knowledge(
+        query: str,
+        logical_knowledge_base: str = "",
+        top_k: int = 6,
+        score_threshold: float = 0.2,
+        include_raw_evidence: bool = True,
+        max_chars_per_result: int = 6000,
+    ) -> dict[str, object]:
+        """Search one logical KB fusion-first, then supplement with original evidence.
+
+        logical_knowledge_base accepts the user-facing name returned by
+        list_logical_knowledge_bases. It may be omitted when there is only one logical KB.
+        """
+        normalized_query = query.strip()
+        if not normalized_query or len(normalized_query) > 2000:
+            raise ValueError("query 长度必须为 1 到 2000 个字符")
+        if not 1 <= top_k <= 20:
+            raise ValueError("top_k 必须在 1 到 20 之间")
+        if not 0 <= score_threshold <= 1:
+            raise ValueError("score_threshold 必须在 0 到 1 之间")
+        if not 500 <= max_chars_per_result <= 12000:
+            raise ValueError("max_chars_per_result 必须在 500 到 12000 之间")
+        logical = _resolve_logical_base(fusion_manager, logical_knowledge_base)
+        fusion_results: list[dict[str, object]] = []
+        if logical.fusion_workspace_slug:
+            fusion_results = await _search_workspace(
+                settings,
+                logical.fusion_workspace_slug,
+                normalized_query,
+                top_k,
+                score_threshold,
+                max_chars_per_result=max_chars_per_result,
+                knowledge_tier="fusion",
+            )
+        raw_results: list[dict[str, object]] = []
+        if include_raw_evidence:
+            raw_limit = max(1, top_k - len(fusion_results))
+            if fusion_results:
+                raw_limit = min(max(2, top_k // 2), top_k)
+            raw_results = await _search_workspace(
+                settings,
+                logical.source_workspace_slug,
+                normalized_query,
+                raw_limit,
+                score_threshold,
+                max_chars_per_result=max_chars_per_result,
+                knowledge_tier="raw_evidence",
+            )
+        combined = [*fusion_results, *raw_results]
+        return {
+            "logical_knowledge_base": logical.name,
+            "query": normalized_query,
+            "search_strategy": "fusion_first_then_raw_evidence",
+            "results": combined,
+            "fusion_count": len(fusion_results),
+            "raw_evidence_count": len(raw_results),
+            "count": len(combined),
+            "answering_guidance": (
+                "优先依据 knowledge_tier=fusion 的高层知识作答；用 raw_evidence 核验、补充"
+                "细节，并在冲突时明确说明原始证据。"
+            ),
+        }
+
+    @server.tool(annotations=read_only)
+    async def global_search_knowledge(
+        query: str,
+        top_k_per_base: int = 4,
+        score_threshold: float = 0.2,
+        include_raw_evidence: bool = True,
+    ) -> dict[str, object]:
+        """Search every logical knowledge base when the relevant domain is unknown."""
+        normalized_query = query.strip()
+        if not normalized_query or len(normalized_query) > 2000:
+            raise ValueError("query 长度必须为 1 到 2000 个字符")
+        if not 1 <= top_k_per_base <= 10:
+            raise ValueError("top_k_per_base 必须在 1 到 10 之间")
+        logical_bases = fusion_manager.list_logical_bases()
+
+        async def search_one(logical: LogicalKnowledgeBase) -> dict[str, object]:
+            fusion_results: list[dict[str, object]] = []
+            if logical.fusion_workspace_slug:
+                fusion_results = await _search_workspace(
+                    settings,
+                    logical.fusion_workspace_slug,
+                    normalized_query,
+                    top_k_per_base,
+                    score_threshold,
+                    knowledge_tier="fusion",
+                )
+            raw_results: list[dict[str, object]] = []
+            if include_raw_evidence:
+                raw_results = await _search_workspace(
+                    settings,
+                    logical.source_workspace_slug,
+                    normalized_query,
+                    max(1, top_k_per_base - len(fusion_results)),
+                    score_threshold,
+                    knowledge_tier="raw_evidence",
+                )
+            return {
+                "logical_knowledge_base": logical.name,
+                "results": [*fusion_results, *raw_results],
+            }
+
+        matches = await asyncio.gather(*(search_one(item) for item in logical_bases))
+        matches = [item for item in matches if item["results"]]
+        return {
+            "query": normalized_query,
+            "search_strategy": "all_logical_bases_fusion_first",
+            "matches": matches,
+            "logical_base_count": len(logical_bases),
+        }
+
+    @server.tool(annotations=read_only)
+    async def get_fusion_knowledge(
+        record_id: str,
+        max_chars: int = 50000,
+    ) -> dict[str, object]:
+        """Read a complete fusion Markdown draft or published version by record_id."""
+        if not 1000 <= max_chars <= 100000:
+            raise ValueError("max_chars 必须在 1000 到 100000 之间")
+        record = fusion_manager.get(record_id.strip())
+        if record is None:
+            raise ValueError("融合知识不存在")
+        document = fusion_manager.document_file(record)
+        if document is None:
+            raise ValueError("融合知识文档尚未生成或已不存在")
+        content = document.read_text(encoding="utf-8", errors="replace")
+        return {
+            **_fusion_summary(record, fusion_manager),
+            "markdown": content[:max_chars],
+            "truncated": len(content) > max_chars,
+            "total_chars": len(content),
         }
 
     @server.tool(annotations=read_only)
