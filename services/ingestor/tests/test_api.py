@@ -1,6 +1,9 @@
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import httpx
+import respx
 from fastapi.testclient import TestClient
 
 from app.config import Settings
@@ -84,6 +87,7 @@ def test_web_ui_requires_login_and_uses_secure_session_cookie(tmp_path: Path) ->
     assert page.status_code == 200
     assert "批量添加视频知识" in page.text
     assert "请先设置新密码" in page.text
+    assert "新建知识库" in page.text
     assert denied.status_code == 401
     assert wrong.status_code == 401
     assert login.status_code == 200
@@ -110,6 +114,66 @@ def test_web_ui_requires_login_and_uses_secure_session_cookie(tmp_path: Path) ->
     assert old_password.status_code == 401
     assert new_password.status_code == 200
     assert new_password.json()["must_change_password"] is False
+
+
+@respx.mock
+def test_web_ui_lists_and_creates_arbitrary_workspaces(tmp_path: Path) -> None:
+    base_url = "http://anythingllm.test/api"
+    settings = Settings(
+        data_dir=tmp_path,
+        ingestor_api_key=API_KEY,
+        web_ui_username="admin",
+        web_ui_password=INITIAL_WEB_PASSWORD,
+        web_ui_session_secret="test-web-session-secret-that-is-at-least-32-characters",
+        anythingllm_base_url=base_url,
+        anythingllm_api_key="anythingllm-test-key",
+        anythingllm_auto_sync=False,
+    )
+    list_route = respx.get(f"{base_url}/v1/workspaces").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "workspaces": [
+                    {"id": 2, "name": "任意知识库", "slug": "custom-library"},
+                    {"id": 1, "name": "另一个库", "slug": "another-library"},
+                ]
+            },
+        )
+    )
+    create_route = respx.post(f"{base_url}/v1/workspace/new").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "workspace": {"id": 3, "name": "用户自己命名", "slug": "user-created"},
+                "message": "Workspace created",
+            },
+        )
+    )
+
+    with TestClient(create_app(settings)) as client:
+        client.post(
+            "/ui/api/login",
+            json={"username": "admin", "password": INITIAL_WEB_PASSWORD},
+        )
+        client.post("/ui/api/password", json={"new_password": USER_WEB_PASSWORD})
+        listed = client.get("/ui/api/workspaces")
+        created = client.post("/ui/api/workspaces", json={"name": "用户自己命名"})
+
+    assert listed.status_code == 200
+    assert listed.json() == {
+        "workspaces": [
+            {"id": 2, "name": "任意知识库", "slug": "custom-library"},
+            {"id": 1, "name": "另一个库", "slug": "another-library"},
+        ]
+    }
+    assert created.status_code == 200
+    assert created.json()["workspace"] == {
+        "id": 3,
+        "name": "用户自己命名",
+        "slug": "user-created",
+    }
+    assert list_route.calls[0].request.headers["authorization"] == "Bearer anythingllm-test-key"
+    assert json.loads(create_route.calls[0].request.content) == {"name": "用户自己命名"}
 
 
 def test_web_password_can_be_changed_again_and_invalidates_other_sessions(tmp_path: Path) -> None:
@@ -189,6 +253,10 @@ def test_web_ui_batch_deduplicates_input_urls(tmp_path: Path) -> None:
             json={"username": "admin", "password": INITIAL_WEB_PASSWORD},
         )
         client.post("/ui/api/password", json={"new_password": USER_WEB_PASSWORD})
+        missing_workspace = client.post(
+            "/ui/api/jobs/batch",
+            json={"urls": ["https://youtu.be/dQw4w9WgXcQ"]},
+        )
         response = client.post(
             "/ui/api/jobs/batch",
             json={
@@ -196,14 +264,18 @@ def test_web_ui_batch_deduplicates_input_urls(tmp_path: Path) -> None:
                     "https://youtu.be/dQw4w9WgXcQ",
                     "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
                     "https://example.com/not-youtube",
-                ]
+                ],
+                "workspace_slug": "custom-library",
             },
         )
 
+    assert missing_workspace.status_code == 422
+    assert missing_workspace.json()["detail"] == "请选择目标知识库"
     assert response.status_code == 200
     items = response.json()["items"]
     assert items[0]["accepted"] is True
     assert items[1]["input_duplicate"] is True
     assert items[1]["job_id"] == items[0]["job_id"]
+    assert items[0]["workspace_slug"] == "custom-library"
     assert items[2]["accepted"] is False
     assert app.state.manager.submit.await_count == 1

@@ -2,7 +2,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 def utc_now() -> datetime:
@@ -45,6 +45,18 @@ class WebLoginRequest(BaseModel):
 class WebPasswordChangeRequest(BaseModel):
     current_password: str | None = Field(default=None, max_length=256)
     new_password: str = Field(min_length=8, max_length=256)
+
+
+class WebWorkspaceCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("知识库名称不能为空")
+        return normalized
 
 
 class JobRecord(BaseModel):

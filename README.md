@@ -95,7 +95,7 @@ sudo chown -R 1000:1000 /你的/DATA_ROOT
 1. 打开 `http://NAS_IP:3001`，完成管理员和模型引导。
 2. DeepSeek 部署可在 `.env` 设置 `ANYTHINGLLM_LLM_PROVIDER=deepseek`，复用自动总结的 Key 和模型。
 3. 中文知识库建议设置 `ANYTHINGLLM_EMBEDDING_MODEL=MintplexLabs/multilingual-e5-small`；首次使用会下载约 487MB。
-4. 创建 workspace，例如“视频知识库”，记下 URL 中的 slug。
+4. 可以先创建一个 workspace，也可以部署完成后直接在 8090 页面创建任意名称的知识库。
 5. 在 AnythingLLM 的开发者/API 设置中创建 API Key。
 6. 写入 `.env`：
 
@@ -107,6 +107,8 @@ ANYTHINGLLM_WORKSPACE_SLUG=视频知识库的slug
 ANYTHINGLLM_AUTO_SYNC=true
 ANYTHINGLLM_SYNC_TIMEOUT_SECONDS=1800
 ```
+
+`ANYTHINGLLM_WORKSPACE_SLUG` 是直接调用 API 或 n8n 时的默认目标。8090 页面会实时读取 AnythingLLM 的全部 workspace，每批内容必须自行选择目标知识库，也可以在页面创建新知识库，不使用任何写死的分类名称。
 
 让导入服务重新读取配置：
 
@@ -151,7 +153,7 @@ docker compose up -d --force-recreate ingestor
 
 ### 通过 Web 页面（推荐）
 
-打开 `http://NAS_IP:8090/ui`，登录后在文本框中每行粘贴一个 YouTube 地址，单次最多 50 条。页面会自动合并同批重复链接，并持续显示字幕读取、Whisper、DeepSeek 总结和 AnythingLLM 入库进度。
+打开 `http://NAS_IP:8090/ui`，先选择已有知识库或输入任意名称创建新知识库，再在文本框中每行粘贴一个 YouTube 地址，单次最多 50 条。页面会自动合并同批重复链接，并持续显示字幕读取、Whisper、DeepSeek 总结、目标知识库和 AnythingLLM 入库进度。
 
 Web 用户名默认为 `admin`，密码由 `scripts/init-nas.sh` 随机生成。只在自己的 NAS 终端查看：
 

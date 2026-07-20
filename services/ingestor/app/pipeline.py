@@ -753,6 +753,64 @@ def strip_json_fence(content: str) -> str:
     return match.group(1).strip() if match else content
 
 
+def _workspace_summary(workspace: dict[str, Any]) -> dict[str, object] | None:
+    name = str(workspace.get("name") or "").strip()
+    slug = str(workspace.get("slug") or "").strip()
+    if not name or not slug:
+        return None
+    return {
+        "id": workspace.get("id"),
+        "name": name,
+        "slug": slug,
+    }
+
+
+async def list_anythingllm_workspaces(settings: Settings) -> list[dict[str, object]]:
+    if not settings.anythingllm_api_key.strip():
+        raise PipelineError("尚未配置 ANYTHINGLLM_API_KEY")
+    endpoint = f"{settings.anythingllm_base_url.rstrip('/')}/v1/workspaces"
+    headers = {"Authorization": f"Bearer {settings.anythingllm_api_key}"}
+    try:
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
+            response = await client.get(endpoint, headers=headers)
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise PipelineError(f"读取 AnythingLLM 知识库失败：{exc}") from exc
+    workspaces = payload.get("workspaces") or []
+    if not isinstance(workspaces, list):
+        raise PipelineError("AnythingLLM 返回了无效的知识库列表")
+    summaries = [
+        summary
+        for workspace in workspaces
+        if isinstance(workspace, dict) and (summary := _workspace_summary(workspace))
+    ]
+    return sorted(summaries, key=lambda item: str(item["name"]).casefold())
+
+
+async def create_anythingllm_workspace(
+    settings: Settings,
+    name: str,
+) -> dict[str, object]:
+    if not settings.anythingllm_api_key.strip():
+        raise PipelineError("尚未配置 ANYTHINGLLM_API_KEY")
+    endpoint = f"{settings.anythingllm_base_url.rstrip('/')}/v1/workspace/new"
+    headers = {"Authorization": f"Bearer {settings.anythingllm_api_key}"}
+    try:
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
+            response = await client.post(endpoint, headers=headers, json={"name": name})
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise PipelineError(f"创建 AnythingLLM 知识库失败：{exc}") from exc
+    workspace = payload.get("workspace")
+    summary = _workspace_summary(workspace) if isinstance(workspace, dict) else None
+    if summary is None:
+        message = str(payload.get("message") or "AnythingLLM 未返回新知识库")
+        raise PipelineError(f"创建 AnythingLLM 知识库失败：{message}")
+    return summary
+
+
 async def upload_to_anythingllm(
     settings: Settings,
     document_path: Path,

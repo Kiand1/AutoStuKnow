@@ -120,6 +120,11 @@
     .card h2 { margin-bottom: 6px; font-size: 19px; }
     .toolbar { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: end; margin-top: 16px; }
     .toolbar .field { margin: 0; }
+    .workspace-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+    .workspace-row .secondary { white-space: nowrap; }
+    .workspace-create { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; margin-top: 10px; }
+    .workspace-message { min-height: 20px; margin: 7px 0 0; color: var(--muted); font-size: 13px; }
+    .workspace-message.error { color: var(--danger); }
     .check { display: flex; align-items: center; gap: 9px; min-height: 46px; color: var(--muted); font-size: 14px; }
     .check input { width: 17px; height: 17px; accent-color: var(--brand); }
     .actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 18px; }
@@ -150,6 +155,7 @@
     @media (max-width: 760px) {
       .grid { grid-template-columns: 1fr; }
       .toolbar { grid-template-columns: 1fr; }
+      .workspace-row, .workspace-create { grid-template-columns: 1fr; }
       .actions { align-items: stretch; flex-direction: column; }
       .actions .primary { width: 100%; }
       .account span { display: none; }
@@ -223,6 +229,21 @@
           <h2>视频地址</h2>
           <p class="subtle">一次最多提交 50 条，同批重复链接会自动合并。</p>
           <div class="field">
+            <label for="workspace">目标知识库</label>
+            <div class="workspace-row">
+              <select id="workspace" required disabled>
+                <option value="">正在读取 AnythingLLM 知识库…</option>
+              </select>
+              <button id="showWorkspaceCreateButton" class="secondary" type="button">新建知识库</button>
+            </div>
+            <div id="workspaceCreatePanel" class="workspace-create hidden">
+              <input id="workspaceName" maxlength="100" placeholder="输入任意知识库名称">
+              <button id="createWorkspaceButton" class="primary" type="button">创建并选择</button>
+              <button id="cancelWorkspaceCreateButton" class="ghost" type="button">取消</button>
+            </div>
+            <p id="workspaceMessage" class="workspace-message"></p>
+          </div>
+          <div class="field">
             <label for="urls">YouTube 链接，每行一个</label>
             <textarea id="urls" placeholder="https://www.youtube.com/watch?v=...&#10;https://youtu.be/..." required></textarea>
           </div>
@@ -266,6 +287,7 @@
     const appView = document.querySelector('#appView');
     const jobsElement = document.querySelector('#jobs');
     const jobs = new Map();
+    const workspaces = new Map();
     let pollTimer = null;
     let passwordChangeRequired = false;
 
@@ -346,6 +368,7 @@
       appView.classList.remove('hidden');
       document.querySelector('#accountName').textContent = username;
       document.querySelector('#password').value = '';
+      await loadWorkspaces();
       await refreshJobs();
       startPolling();
     }
@@ -364,6 +387,42 @@
     function updateCounter() {
       const count = getUrls().length;
       document.querySelector('#urlCounter').textContent = `${count} 条地址`;
+    }
+
+    function renderWorkspaceOptions(selectedSlug = '') {
+      const select = document.querySelector('#workspace');
+      select.replaceChildren(new Option('请选择目标知识库', ''));
+      [...workspaces.values()].forEach(workspace => {
+        select.add(new Option(workspace.name, workspace.slug));
+      });
+      const remembered = selectedSlug || localStorage.getItem('autostuknow_workspace_slug') || '';
+      select.value = workspaces.has(remembered) ? remembered : '';
+      select.disabled = false;
+    }
+
+    async function loadWorkspaces(selectedSlug = '') {
+      const select = document.querySelector('#workspace');
+      const message = document.querySelector('#workspaceMessage');
+      select.disabled = true;
+      message.classList.remove('error');
+      message.textContent = '正在读取 AnythingLLM 知识库…';
+      try {
+        const result = await api('/ui/api/workspaces');
+        workspaces.clear();
+        result.workspaces.forEach(workspace => workspaces.set(workspace.slug, workspace));
+        renderWorkspaceOptions(selectedSlug);
+        message.textContent = workspaces.size
+          ? `已读取 ${workspaces.size} 个知识库，请选择本次内容的目标。`
+          : 'AnythingLLM 中还没有知识库，请先创建一个。';
+      } catch (error) {
+        select.replaceChildren(new Option('知识库读取失败', ''));
+        message.classList.add('error');
+        message.textContent = error.message;
+      }
+    }
+
+    function workspaceName(slug) {
+      return workspaces.get(slug)?.name || slug || '未指定';
     }
 
     function renderJobs() {
@@ -388,6 +447,7 @@
           <div class="progress"><span style="width:${progress}%"></span></div>
           <div class="job-meta">
             ${source ? `<span>来源：${escapeHtml(source)}</span>` : ''}
+            ${job.workspace_slug ? `<span>知识库：${escapeHtml(workspaceName(job.workspace_slug))}</span>` : ''}
             ${job.sync_status ? `<span>入库：${escapeHtml(job.sync_status)}</span>` : ''}
             ${warning ? `<span>${escapeHtml(warning)}</span>` : ''}
             <span>ID：${escapeHtml(String(job.id).slice(0, 8))}</span>
@@ -466,11 +526,13 @@
     document.querySelector('#submitForm').addEventListener('submit', async event => {
       event.preventDefault();
       const urls = getUrls();
+      const workspaceSlug = document.querySelector('#workspace').value;
       const button = document.querySelector('#submitButton');
       const message = document.querySelector('#submitMessage');
       message.textContent = '';
       if (!urls.length) { message.textContent = '请至少填写一个视频地址'; return; }
       if (urls.length > 50) { message.textContent = '一次最多提交 50 条地址'; return; }
+      if (!workspaceSlug) { message.textContent = '请选择目标知识库'; return; }
       button.disabled = true;
       try {
         const result = await api('/ui/api/jobs/batch', {
@@ -478,6 +540,7 @@
           body: JSON.stringify({
             urls,
             language: document.querySelector('#language').value,
+            workspace_slug: workspaceSlug,
             force: document.querySelector('#force').checked
           })
         });
@@ -485,7 +548,8 @@
         const rejected = result.items.filter(item => !item.accepted);
         accepted.forEach(item => jobs.set(item.job_id, {
           id: item.job_id, url: item.url, canonical_url: item.url, status: item.status,
-          stage: item.stage, sync_status: 'pending', created_at: new Date().toISOString(), warnings: []
+          stage: item.stage, sync_status: 'pending', workspace_slug: item.workspace_slug,
+          created_at: new Date().toISOString(), warnings: []
         }));
         renderJobs();
         document.querySelector('#urls').value = rejected.map(item => item.url).join('\n');
@@ -500,6 +564,44 @@
     });
 
     document.querySelector('#urls').addEventListener('input', updateCounter);
+    document.querySelector('#workspace').addEventListener('change', event => {
+      if (event.target.value) localStorage.setItem('autostuknow_workspace_slug', event.target.value);
+      else localStorage.removeItem('autostuknow_workspace_slug');
+    });
+    document.querySelector('#showWorkspaceCreateButton').addEventListener('click', () => {
+      document.querySelector('#workspaceCreatePanel').classList.remove('hidden');
+      document.querySelector('#workspaceName').focus();
+    });
+    document.querySelector('#cancelWorkspaceCreateButton').addEventListener('click', () => {
+      document.querySelector('#workspaceCreatePanel').classList.add('hidden');
+      document.querySelector('#workspaceName').value = '';
+    });
+    document.querySelector('#createWorkspaceButton').addEventListener('click', async () => {
+      const nameInput = document.querySelector('#workspaceName');
+      const button = document.querySelector('#createWorkspaceButton');
+      const message = document.querySelector('#workspaceMessage');
+      const name = nameInput.value.trim();
+      if (!name) { message.classList.add('error'); message.textContent = '请输入知识库名称'; return; }
+      button.disabled = true;
+      message.classList.remove('error');
+      message.textContent = '正在创建知识库…';
+      try {
+        const result = await api('/ui/api/workspaces', {
+          method: 'POST',
+          body: JSON.stringify({ name })
+        });
+        await loadWorkspaces(result.workspace.slug);
+        localStorage.setItem('autostuknow_workspace_slug', result.workspace.slug);
+        document.querySelector('#workspaceCreatePanel').classList.add('hidden');
+        nameInput.value = '';
+        showToast(`已创建知识库：${result.workspace.name}`);
+      } catch (error) {
+        message.classList.add('error');
+        message.textContent = error.message;
+      } finally {
+        button.disabled = false;
+      }
+    });
     document.querySelector('#refreshButton').addEventListener('click', refreshJobs);
     document.querySelector('#changePasswordButton').addEventListener('click', () => {
       showPasswordChange(document.querySelector('#accountName').textContent, false);

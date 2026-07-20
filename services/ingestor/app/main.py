@@ -15,8 +15,14 @@ from .models import (
     JobSubmission,
     WebLoginRequest,
     WebPasswordChangeRequest,
+    WebWorkspaceCreateRequest,
 )
-from .pipeline import JobManager, PipelineError
+from .pipeline import (
+    JobManager,
+    PipelineError,
+    create_anythingllm_workspace,
+    list_anythingllm_workspaces,
+)
 from .urls import canonicalize_youtube_url
 from .web_auth import (
     SESSION_COOKIE,
@@ -176,6 +182,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         revision = credential_store.set_password(password_change.new_password)
         return authenticated_response(revision)
 
+    @application.get("/ui/api/workspaces", include_in_schema=False)
+    async def web_workspaces(
+        _: str = Depends(require_web_session),
+    ) -> dict[str, list[dict[str, object]]]:
+        try:
+            workspaces = await list_anythingllm_workspaces(resolved_settings)
+        except PipelineError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
+        return {"workspaces": workspaces}
+
+    @application.post("/ui/api/workspaces", include_in_schema=False)
+    async def web_create_workspace(
+        workspace_request: WebWorkspaceCreateRequest,
+        _: str = Depends(require_web_session),
+    ) -> dict[str, dict[str, object]]:
+        try:
+            workspace = await create_anythingllm_workspace(
+                resolved_settings,
+                workspace_request.name,
+            )
+        except PipelineError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
+        return {"workspace": workspace}
+
     @application.post("/ui/api/logout", include_in_schema=False)
     async def web_logout() -> Response:
         response = Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -188,6 +224,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: BatchJobRequest,
         _: str = Depends(require_web_session),
     ) -> dict[str, list[dict[str, object]]]:
+        workspace_slug = (request.workspace_slug or "").strip()
+        if not workspace_slug:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="请选择目标知识库",
+            )
         items: list[dict[str, object]] = []
         accepted: dict[str, JobSubmission] = {}
         for raw_url in request.urls:
@@ -204,6 +246,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "url": submitted_url,
                         "accepted": True,
                         "input_duplicate": True,
+                        "workspace_slug": workspace_slug,
                         **previous.model_dump(mode="json"),
                     }
                 )
@@ -212,7 +255,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 JobRequest(
                     url=canonical_url,
                     language=request.language,
-                    workspace_slug=request.workspace_slug,
+                    workspace_slug=workspace_slug,
                     force=request.force,
                 )
             )
@@ -229,6 +272,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "url": submitted_url,
                     "accepted": True,
                     "input_duplicate": False,
+                    "workspace_slug": workspace_slug,
                     **submission.model_dump(mode="json"),
                 }
             )
