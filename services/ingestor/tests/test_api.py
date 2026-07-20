@@ -487,6 +487,7 @@ def test_workspace_delete_requires_name_and_cleans_only_managed_source_documents
             web_ui_session_secret="test-web-session-secret-that-is-at-least-32-characters",
             anythingllm_base_url=base_url,
             anythingllm_api_key="anythingllm-test-key",
+            anythingllm_workspace_slug="research",
             anythingllm_auto_sync=False,
         )
     )
@@ -506,8 +507,8 @@ def test_workspace_delete_requires_name_and_cleans_only_managed_source_documents
             id="failed-knowledge",
             url="https://youtu.be/fffffffffff",
             canonical_url="https://www.youtube.com/watch?v=fffffffffff",
-            workspace_slug="research",
-            category_path="投资/股票",
+            workspace_slug=None,
+            category_path="",
             status=JobStatus.failed,
             stage="failed",
         ),
@@ -584,7 +585,7 @@ def test_workspace_delete_requires_name_and_cleans_only_managed_source_documents
             "document_count": 3,
             "thread_count": 1,
         },
-        "directories": 3,
+        "directories": 2,
         "managed_jobs": 2,
         "managed_documents": 1,
         "active_jobs": 0,
@@ -598,7 +599,7 @@ def test_workspace_delete_requires_name_and_cleans_only_managed_source_documents
         "workspace_name": "投资研究",
         "deleted_jobs": 2,
         "deleted_documents": 1,
-        "deleted_directories": 3,
+        "deleted_directories": 2,
     }
     assert workspace_details.call_count == 3
     assert delete_workspace.call_count == 1

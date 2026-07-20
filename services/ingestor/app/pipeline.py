@@ -123,7 +123,12 @@ class JobManager:
         ]
 
     def jobs_in_workspace(self, workspace_slug: str) -> list[JobRecord]:
-        return [job for job in self.jobs.values() if job.workspace_slug == workspace_slug]
+        return [
+            job
+            for job in self.jobs.values()
+            if (job.workspace_slug or self.settings.anythingllm_workspace_slug)
+            == workspace_slug
+        ]
 
     async def delete_job(self, job_id: str) -> JobRecord:
         async with self._lock:
