@@ -143,3 +143,12 @@ class DirectoryCatalog:
                 self._directories.pop(workspace_slug, None)
             self._save()
         return removed
+
+    def delete_workspace(self, workspace_slug: str) -> list[str]:
+        with self._lock:
+            removed = sorted(
+                self._directories.pop(workspace_slug, set()),
+                key=directory_sort_key,
+            )
+            self._save()
+        return removed

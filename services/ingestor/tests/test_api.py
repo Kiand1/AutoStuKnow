@@ -471,3 +471,144 @@ def test_single_knowledge_delete_keeps_local_record_when_remote_purge_fails(
     assert "AnythingLLM 删除知识失败" in failed.json()["detail"]
     assert manager.get("knowledge-job") is job
     assert (tmp_path / "jobs" / "knowledge-job" / "job.json").is_file()
+
+
+@respx.mock
+def test_workspace_delete_requires_name_and_cleans_only_managed_source_documents(
+    tmp_path: Path,
+) -> None:
+    base_url = "http://anythingllm.test/api"
+    app = create_app(
+        Settings(
+            data_dir=tmp_path,
+            ingestor_api_key=API_KEY,
+            web_ui_username="admin",
+            web_ui_password=INITIAL_WEB_PASSWORD,
+            web_ui_session_secret="test-web-session-secret-that-is-at-least-32-characters",
+            anythingllm_base_url=base_url,
+            anythingllm_api_key="anythingllm-test-key",
+            anythingllm_auto_sync=False,
+        )
+    )
+    manager = app.state.manager
+    jobs = [
+        JobRecord(
+            id="managed-knowledge",
+            url="https://youtu.be/eeeeeeeeeee",
+            canonical_url="https://www.youtube.com/watch?v=eeeeeeeeeee",
+            workspace_slug="research",
+            category_path="投资/虚拟币",
+            status=JobStatus.completed,
+            stage="completed",
+            anythingllm_document_location="custom-documents/managed.json",
+        ),
+        JobRecord(
+            id="failed-knowledge",
+            url="https://youtu.be/fffffffffff",
+            canonical_url="https://www.youtube.com/watch?v=fffffffffff",
+            workspace_slug="research",
+            category_path="投资/股票",
+            status=JobStatus.failed,
+            stage="failed",
+        ),
+        JobRecord(
+            id="other-workspace-knowledge",
+            url="https://youtu.be/ggggggggggg",
+            canonical_url="https://www.youtube.com/watch?v=ggggggggggg",
+            workspace_slug="development",
+            category_path="Python",
+            status=JobStatus.completed,
+            stage="completed",
+        ),
+    ]
+    for job in jobs:
+        manager.jobs[job.id] = job
+        manager.storage.save(job)
+        manager.catalog.register(job.workspace_slug, job.category_path)
+
+    workspace_details = respx.get(f"{base_url}/v1/workspace/research").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "workspace": [
+                    {
+                        "id": 7,
+                        "name": "投资研究",
+                        "slug": "research",
+                        "documents": [
+                            {"docpath": "custom-documents/managed.json"},
+                            {"docpath": "custom-documents/manual.pdf.json"},
+                            {"docpath": "custom-documents/shared.pdf.json"},
+                        ],
+                        "threads": [{"slug": "default"}],
+                    }
+                ]
+            },
+        )
+    )
+    remove_embeddings = respx.post(
+        f"{base_url}/v1/workspace/research/update-embeddings"
+    ).mock(return_value=httpx.Response(200, json={}))
+    purge_documents = respx.delete(f"{base_url}/v1/system/remove-documents").mock(
+        return_value=httpx.Response(200, json={"success": True})
+    )
+    delete_workspace = respx.delete(f"{base_url}/v1/workspace/research").mock(
+        return_value=httpx.Response(200)
+    )
+
+    client = ready_web_client(app)
+    try:
+        preview = client.post(
+            "/ui/api/workspaces/delete-preview",
+            json={"workspace_slug": "research"},
+        )
+        rejected = client.request(
+            "DELETE",
+            "/ui/api/workspaces/research",
+            json={"confirm_name": "另一个知识库"},
+        )
+        deleted = client.request(
+            "DELETE",
+            "/ui/api/workspaces/research",
+            json={"confirm_name": "投资研究"},
+        )
+    finally:
+        client.__exit__(None, None, None)
+
+    assert preview.status_code == 200
+    assert preview.json() == {
+        "workspace": {
+            "id": 7,
+            "name": "投资研究",
+            "slug": "research",
+            "document_count": 3,
+            "thread_count": 1,
+        },
+        "directories": 3,
+        "managed_jobs": 2,
+        "managed_documents": 1,
+        "active_jobs": 0,
+    }
+    assert rejected.status_code == 409
+    assert rejected.json()["detail"] == "确认名称与待删除知识库不一致"
+    assert deleted.status_code == 200
+    assert deleted.json() == {
+        "workspace_slug": "research",
+        "deleted": True,
+        "workspace_name": "投资研究",
+        "deleted_jobs": 2,
+        "deleted_documents": 1,
+        "deleted_directories": 3,
+    }
+    assert workspace_details.call_count == 3
+    assert delete_workspace.call_count == 1
+    assert set(manager.jobs) == {"other-workspace-knowledge"}
+    assert manager.directory_paths("research") == []
+    assert manager.directory_paths("development") == ["Python"]
+    assert json.loads(remove_embeddings.calls[0].request.content) == {
+        "adds": [],
+        "deletes": ["custom-documents/managed.json"],
+    }
+    assert json.loads(purge_documents.calls[0].request.content) == {
+        "names": ["custom-documents/managed.json"]
+    }

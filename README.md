@@ -159,6 +159,8 @@ docker compose up -d --force-recreate ingestor
 
 页面支持删除 AutoStuKnow 导入的单条知识，也支持递归删除整个目录。单条删除前会展示知识位置并二次确认；目录删除前会统计子目录、处理记录和已入库文档数量，并要求输入完整目录路径。删除已入库知识时，系统会先从 AnythingLLM workspace 删除向量，再永久删除 AnythingLLM 源文档，最后清理 AutoStuKnow 本地处理记录。任一远端步骤失败时会保留本地记录以便重试。正在处理的任务不能删除，目录内存在运行中任务时也不会执行递归删除。
 
+目标知识库旁也提供“删除知识库”入口。删除前会读取 AnythingLLM 的文档关联数量，统计 AutoStuKnow 管理的目录和任务，并要求输入完整知识库名称。确认后会永久删除该 workspace 的向量、会话、配置、AutoStuKnow 处理记录及 AutoStuKnow 上传的源文档。手工上传或其他工具导入的共享源文件只解除该 workspace 的向量关联，不从 AnythingLLM 公共文档池永久清理，以免影响其他 workspace。
+
 目录只是 AutoStuKnow 对自己导入内容的组织层，不会删除同一 AnythingLLM workspace 中手工上传或由其他工具导入的文档。空目录保存在 `${DATA_ROOT}/ingestor/catalog.json`，已有未分类任务会继续显示在根目录。
 
 Web 用户名默认为 `admin`，密码由 `scripts/init-nas.sh` 随机生成。只在自己的 NAS 终端查看：

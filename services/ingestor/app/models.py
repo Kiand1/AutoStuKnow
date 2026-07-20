@@ -73,6 +73,30 @@ class WebWorkspaceCreateRequest(BaseModel):
         return normalized
 
 
+class WebWorkspaceTargetRequest(BaseModel):
+    workspace_slug: str = Field(min_length=1, max_length=128)
+
+    @field_validator("workspace_slug")
+    @classmethod
+    def normalize_workspace_slug(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("知识库不能为空")
+        return normalized
+
+
+class WebWorkspaceDeleteRequest(BaseModel):
+    confirm_name: str = Field(min_length=1, max_length=100)
+
+    @field_validator("confirm_name")
+    @classmethod
+    def normalize_confirm_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("确认名称不能为空")
+        return normalized
+
+
 class WebDirectoryRequest(BaseModel):
     workspace_slug: str = Field(min_length=1, max_length=128)
     path: str = Field(min_length=1, max_length=512)

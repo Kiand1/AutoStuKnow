@@ -19,11 +19,14 @@ from .models import (
     WebLoginRequest,
     WebPasswordChangeRequest,
     WebWorkspaceCreateRequest,
+    WebWorkspaceDeleteRequest,
+    WebWorkspaceTargetRequest,
 )
 from .pipeline import (
     JobManager,
     PipelineError,
     create_anythingllm_workspace,
+    get_anythingllm_workspace,
     list_anythingllm_workspaces,
 )
 from .urls import canonicalize_youtube_url
@@ -214,6 +217,55 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 detail=str(exc),
             ) from exc
         return {"workspace": workspace}
+
+    @application.post("/ui/api/workspaces/delete-preview", include_in_schema=False)
+    async def web_workspace_delete_preview(
+        workspace_request: WebWorkspaceTargetRequest,
+        _: str = Depends(require_web_session),
+    ) -> dict[str, object]:
+        try:
+            workspace = await get_anythingllm_workspace(
+                resolved_settings,
+                workspace_request.workspace_slug,
+            )
+        except PipelineError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=str(exc),
+            ) from exc
+        matched_jobs = manager.jobs_in_workspace(workspace_request.workspace_slug)
+        return {
+            "workspace": workspace,
+            "directories": len(manager.directory_paths(workspace_request.workspace_slug)),
+            "managed_jobs": len(matched_jobs),
+            "managed_documents": sum(
+                bool(job.anythingllm_document_location) for job in matched_jobs
+            ),
+            "active_jobs": sum(
+                job.status.value in {"queued", "running"} for job in matched_jobs
+            ),
+        }
+
+    @application.delete(
+        "/ui/api/workspaces/{workspace_slug}",
+        include_in_schema=False,
+    )
+    async def web_delete_workspace(
+        workspace_slug: str,
+        delete_request: WebWorkspaceDeleteRequest,
+        _: str = Depends(require_web_session),
+    ) -> dict[str, int | str | bool]:
+        try:
+            result = await manager.delete_workspace(
+                workspace_slug.strip(),
+                delete_request.confirm_name,
+            )
+        except PipelineError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=str(exc),
+            ) from exc
+        return {"workspace_slug": workspace_slug, "deleted": True, **result}
 
     @application.get("/ui/api/directories", include_in_schema=False)
     async def web_directories(

@@ -123,7 +123,7 @@
     .card h2 { margin-bottom: 6px; font-size: 19px; }
     .toolbar { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: end; margin-top: 16px; }
     .toolbar .field { margin: 0; }
-    .workspace-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }
+    .workspace-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; }
     .workspace-row .secondary { white-space: nowrap; }
     .workspace-create { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; margin-top: 10px; }
     .workspace-message { min-height: 20px; margin: 7px 0 0; color: var(--muted); font-size: 13px; }
@@ -249,6 +249,7 @@
                 <option value="">正在读取 AnythingLLM 知识库…</option>
               </select>
               <button id="showWorkspaceCreateButton" class="secondary" type="button">新建知识库</button>
+              <button id="deleteWorkspaceButton" class="danger-ghost" type="button" disabled>删除知识库</button>
             </div>
             <div id="workspaceCreatePanel" class="workspace-create hidden">
               <input id="workspaceName" maxlength="100" placeholder="输入任意知识库名称">
@@ -316,7 +317,7 @@
       <p id="confirmMessage" class="subtle"></p>
       <div id="confirmWarning" class="dialog-warning"></div>
       <div id="confirmInputField" class="field hidden">
-        <label for="confirmInput">输入完整目录路径以确认</label>
+        <label id="confirmInputLabel" for="confirmInput">输入确认信息</label>
         <input id="confirmInput" maxlength="512" autocomplete="off">
       </div>
       <div class="dialog-actions">
@@ -428,7 +429,7 @@
       setTimeout(() => toast.classList.remove('show'), 2200);
     }
 
-    function requestDeleteConfirmation({ title, message, warning, requiredText = '' }) {
+    function requestDeleteConfirmation({ title, message, warning, requiredText = '', inputLabel = '输入确认信息' }) {
       const dialog = document.querySelector('#confirmDialog');
       const inputField = document.querySelector('#confirmInputField');
       const input = document.querySelector('#confirmInput');
@@ -436,6 +437,7 @@
       document.querySelector('#confirmTitle').textContent = title;
       document.querySelector('#confirmMessage').textContent = message;
       document.querySelector('#confirmWarning').textContent = warning;
+      document.querySelector('#confirmInputLabel').textContent = inputLabel;
       requiredConfirmationText = requiredText;
       input.value = '';
       inputField.classList.toggle('hidden', !requiredText);
@@ -471,6 +473,7 @@
       const remembered = selectedSlug || localStorage.getItem('autostuknow_workspace_slug') || '';
       select.value = workspaces.has(remembered) ? remembered : '';
       select.disabled = false;
+      document.querySelector('#deleteWorkspaceButton').disabled = !select.value;
     }
 
     async function loadWorkspaces(selectedSlug = '') {
@@ -490,6 +493,7 @@
         await loadDirectories();
       } catch (error) {
         select.replaceChildren(new Option('知识库读取失败', ''));
+        document.querySelector('#deleteWorkspaceButton').disabled = true;
         message.classList.add('error');
         message.textContent = error.message;
       }
@@ -700,6 +704,7 @@
     document.querySelector('#workspace').addEventListener('change', async event => {
       if (event.target.value) localStorage.setItem('autostuknow_workspace_slug', event.target.value);
       else localStorage.removeItem('autostuknow_workspace_slug');
+      document.querySelector('#deleteWorkspaceButton').disabled = !event.target.value;
       document.querySelector('#directoryCreatePanel').classList.add('hidden');
       await loadDirectories();
     });
@@ -799,7 +804,8 @@
           title: `删除目录“${path}”`,
           message: `请输入完整目录路径“${path}”以确认。`,
           warning: `将递归删除 ${preview.directories} 个目录、${preview.jobs} 条处理记录，其中 ${preview.synced_documents} 条已进入 AnythingLLM。向量与源文档会一并永久删除，无法恢复。`,
-          requiredText: path
+          requiredText: path,
+          inputLabel: '输入完整目录路径以确认'
         });
         if (!confirmed) return;
         document.querySelector('#deleteDirectoryButton').disabled = true;
@@ -814,6 +820,45 @@
       } catch (error) {
         showToast(error.message);
         await loadDirectories(path);
+      }
+    });
+    document.querySelector('#deleteWorkspaceButton').addEventListener('click', async () => {
+      const workspaceSlug = document.querySelector('#workspace').value;
+      if (!workspaceSlug) return;
+      const button = document.querySelector('#deleteWorkspaceButton');
+      try {
+        const preview = await api('/ui/api/workspaces/delete-preview', {
+          method: 'POST',
+          body: JSON.stringify({ workspace_slug: workspaceSlug })
+        });
+        if (preview.active_jobs) {
+          showToast(`知识库中还有 ${preview.active_jobs} 个任务正在处理，暂时不能删除`);
+          return;
+        }
+        const name = preview.workspace.name;
+        const confirmed = await requestDeleteConfirmation({
+          title: `删除知识库“${name}”`,
+          message: `请输入完整知识库名称“${name}”以确认。`,
+          warning: `AnythingLLM 中共有 ${preview.workspace.document_count} 条文档关联；AutoStuKnow 将清理 ${preview.directories} 个目录、${preview.managed_jobs} 条处理记录和 ${preview.managed_documents} 个源文档。该知识库的向量、会话和配置会永久删除，无法恢复。`,
+          requiredText: name,
+          inputLabel: '输入完整知识库名称以确认'
+        });
+        if (!confirmed) return;
+        button.disabled = true;
+        await api(`/ui/api/workspaces/${encodeURIComponent(workspaceSlug)}`, {
+          method: 'DELETE',
+          body: JSON.stringify({ confirm_name: name })
+        });
+        localStorage.removeItem('autostuknow_workspace_slug');
+        localStorage.removeItem(directoryStorageKey(workspaceSlug));
+        jobs.clear();
+        directories.clear();
+        await loadWorkspaces();
+        await refreshJobs();
+        showToast(`知识库“${name}”已删除`);
+      } catch (error) {
+        button.disabled = false;
+        showToast(error.message);
       }
     });
     jobsElement.addEventListener('click', async event => {

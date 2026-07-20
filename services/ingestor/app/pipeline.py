@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from html import unescape
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import httpx
 import yt_dlp
@@ -122,6 +122,9 @@ class JobManager:
             and path_is_within(job.category_path, path)
         ]
 
+    def jobs_in_workspace(self, workspace_slug: str) -> list[JobRecord]:
+        return [job for job in self.jobs.values() if job.workspace_slug == workspace_slug]
+
     async def delete_job(self, job_id: str) -> JobRecord:
         async with self._lock:
             job = self.get(job_id)
@@ -172,6 +175,51 @@ class JobManager:
                 del self.jobs[job.id]
             removed_directories = self.catalog.delete(workspace_slug, path)
             return {
+                "deleted_jobs": len(matched_jobs),
+                "deleted_documents": len(locations),
+                "deleted_directories": len(removed_directories),
+            }
+
+    async def delete_workspace(
+        self,
+        workspace_slug: str,
+        confirm_name: str,
+    ) -> dict[str, int | str]:
+        async with self._lock:
+            workspace = await get_anythingllm_workspace(self.settings, workspace_slug)
+            workspace_name = str(workspace["name"])
+            if workspace_name != confirm_name:
+                raise PipelineError("确认名称与待删除知识库不一致")
+            matched_jobs = self.jobs_in_workspace(workspace_slug)
+            active_jobs = [
+                job
+                for job in matched_jobs
+                if job.status in {JobStatus.queued, JobStatus.running}
+            ]
+            if active_jobs:
+                raise PipelineError(
+                    f"知识库中仍有 {len(active_jobs)} 个任务正在处理，请等待完成后再删除"
+                )
+            locations = sorted(
+                {
+                    job.anythingllm_document_location
+                    for job in matched_jobs
+                    if job.anythingllm_document_location
+                }
+            )
+            if locations:
+                await delete_anythingllm_documents(
+                    self.settings,
+                    workspace_slug,
+                    locations,
+                )
+            await delete_anythingllm_workspace(self.settings, workspace_slug)
+            for job in matched_jobs:
+                self.storage.delete(job.id)
+                del self.jobs[job.id]
+            removed_directories = self.catalog.delete_workspace(workspace_slug)
+            return {
+                "workspace_name": workspace_name,
                 "deleted_jobs": len(matched_jobs),
                 "deleted_documents": len(locations),
                 "deleted_directories": len(removed_directories),
@@ -898,6 +946,60 @@ async def create_anythingllm_workspace(
         message = str(payload.get("message") or "AnythingLLM 未返回新知识库")
         raise PipelineError(f"创建 AnythingLLM 知识库失败：{message}")
     return summary
+
+
+async def get_anythingllm_workspace(
+    settings: Settings,
+    workspace_slug: str,
+) -> dict[str, object]:
+    if not settings.anythingllm_api_key.strip():
+        raise PipelineError("尚未配置 ANYTHINGLLM_API_KEY")
+    encoded_slug = quote(workspace_slug, safe="")
+    endpoint = f"{settings.anythingllm_base_url.rstrip('/')}/v1/workspace/{encoded_slug}"
+    headers = {"Authorization": f"Bearer {settings.anythingllm_api_key}"}
+    try:
+        async with httpx.AsyncClient(timeout=30.0, trust_env=False) as client:
+            response = await client.get(endpoint, headers=headers)
+        response.raise_for_status()
+        payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise PipelineError(f"读取 AnythingLLM 知识库详情失败：{exc}") from exc
+    workspaces = payload.get("workspace") or []
+    if isinstance(workspaces, dict):
+        workspaces = [workspaces]
+    workspace = next(
+        (
+            item
+            for item in workspaces
+            if isinstance(item, dict) and str(item.get("slug") or "") == workspace_slug
+        ),
+        None,
+    )
+    if workspace is None:
+        raise PipelineError("AnythingLLM 中不存在该知识库")
+    summary = _workspace_summary(workspace)
+    if summary is None:
+        raise PipelineError("AnythingLLM 返回了无效的知识库详情")
+    summary["document_count"] = len(workspace.get("documents") or [])
+    summary["thread_count"] = len(workspace.get("threads") or [])
+    return summary
+
+
+async def delete_anythingllm_workspace(
+    settings: Settings,
+    workspace_slug: str,
+) -> None:
+    if not settings.anythingllm_api_key.strip():
+        raise PipelineError("尚未配置 ANYTHINGLLM_API_KEY，不能删除知识库")
+    encoded_slug = quote(workspace_slug, safe="")
+    endpoint = f"{settings.anythingllm_base_url.rstrip('/')}/v1/workspace/{encoded_slug}"
+    headers = {"Authorization": f"Bearer {settings.anythingllm_api_key}"}
+    try:
+        async with httpx.AsyncClient(timeout=60.0, trust_env=False) as client:
+            response = await client.delete(endpoint, headers=headers)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise PipelineError(f"AnythingLLM 删除知识库失败：{exc}") from exc
 
 
 async def upload_to_anythingllm(
