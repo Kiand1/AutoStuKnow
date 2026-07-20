@@ -409,6 +409,42 @@
           </label>
         </div>
       </section>
+      <section class="card fusion-card" aria-labelledby="fusionTitle">
+        <div class="fusion-head">
+          <div>
+            <h2 id="fusionTitle">知识融合</h2>
+            <p class="subtle">原始视频知识保持不变。DeepSeek 先生成可预览草稿，确认后才发布到单独的融合知识库；MCP 会优先检索融合知识。</p>
+          </div>
+          <button id="refreshFusionsButton" class="ghost" type="button">刷新融合记录</button>
+        </div>
+        <form id="fusionForm" class="fusion-form">
+          <div class="field">
+            <label for="fusionName">融合知识标题</label>
+            <input id="fusionName" maxlength="200" placeholder="例如：双均线交易系统" required>
+          </div>
+          <div class="field">
+            <label for="fusionScope">原始资料范围</label>
+            <select id="fusionScope">
+              <option value="selected">勾选的知识</option>
+              <option value="directory">当前目录（含子目录）</option>
+              <option value="workspace">整个原始知识库</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="fusionCategory">融合目录（可选）</label>
+            <input id="fusionCategory" maxlength="512" placeholder="例如：交易系统/趋势策略">
+          </div>
+          <div class="fusion-form-wide">
+            <div id="fusionSelection" class="fusion-selection">请先选择知识库，并在下方勾选至少 2 条原始知识。</div>
+            <div class="form-actions" style="margin:0">
+              <button id="cancelFusionUpdateButton" class="ghost hidden" type="button">取消更新</button>
+              <button id="generateFusionButton" class="primary" type="submit">生成融合草稿</button>
+            </div>
+          </div>
+          <p id="fusionMessage" class="message fusion-form-wide" role="alert"></p>
+        </form>
+        <div id="fusionList" class="fusion-list"><div class="empty">当前知识库还没有融合知识。</div></div>
+      </section>
       <section class="card library-card" aria-labelledby="libraryTitle">
         <div class="library-head">
           <div>
@@ -438,42 +474,6 @@
             <div id="libraryDocuments" class="library-documents"></div>
           </section>
         </div>
-      </section>
-      <section class="card fusion-card" aria-labelledby="fusionTitle">
-        <div class="fusion-head">
-          <div>
-            <h2 id="fusionTitle">知识融合</h2>
-            <p class="subtle">原始视频知识保持不变。DeepSeek 先生成可预览草稿，确认后才发布到单独的融合知识库；MCP 会优先检索融合知识。</p>
-          </div>
-          <button id="refreshFusionsButton" class="ghost" type="button">刷新融合记录</button>
-        </div>
-        <form id="fusionForm" class="fusion-form">
-          <div class="field">
-            <label for="fusionName">融合知识标题</label>
-            <input id="fusionName" maxlength="200" placeholder="例如：双均线交易系统" required>
-          </div>
-          <div class="field">
-            <label for="fusionScope">原始资料范围</label>
-            <select id="fusionScope">
-              <option value="selected">勾选的知识</option>
-              <option value="directory">当前目录（含子目录）</option>
-              <option value="workspace">整个原始知识库</option>
-            </select>
-          </div>
-          <div class="field">
-            <label for="fusionCategory">融合目录（可选）</label>
-            <input id="fusionCategory" maxlength="512" placeholder="例如：交易系统/趋势策略">
-          </div>
-          <div class="fusion-form-wide">
-            <div id="fusionSelection" class="fusion-selection">请先选择知识库，并在上方勾选至少 2 条原始知识。</div>
-            <div class="form-actions" style="margin:0">
-              <button id="cancelFusionUpdateButton" class="ghost hidden" type="button">取消更新</button>
-              <button id="generateFusionButton" class="primary" type="submit">生成融合草稿</button>
-            </div>
-          </div>
-          <p id="fusionMessage" class="message fusion-form-wide" role="alert"></p>
-        </form>
-        <div id="fusionList" class="fusion-list"><div class="empty">当前知识库还没有融合知识。</div></div>
       </section>
       <div class="jobs-head"><h2>处理记录</h2><button id="refreshButton" class="secondary" type="button">刷新</button></div>
       <div id="jobs" class="jobs"><div class="card empty">还没有任务</div></div>
@@ -966,7 +966,7 @@
       const scope = document.querySelector('#fusionScope').value;
       const count = fusionScopeCount();
       const button = document.querySelector('#generateFusionButton');
-      let text = '请先选择知识库，并在上方勾选至少 2 条原始知识。';
+      let text = '请先选择知识库，并在下方勾选至少 2 条原始知识。';
       let blocked = !workspaceSlug || !libraryData || count < 2;
       if (workspace?.logical_role === 'fusion') {
         text = '当前选择的是系统生成的融合知识库。请切换到对应的原始知识库后再生成，避免循环融合。';
